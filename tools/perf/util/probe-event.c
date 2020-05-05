@@ -926,6 +926,11 @@ static int try_to_find_probe_trace_events(struct perf_probe_event *pev,
 			 */
 			clear_perf_probe_point(&pev->point);
 			memcpy(&pev->point, &tmp, sizeof(tmp));
+		} else {
+			if (need_dwarf)
+				return -ENOENT;
+			pr_debug("Failed to use debug info. Try to use symbols.\n");
+			return 0;
 		}
 	}
 
