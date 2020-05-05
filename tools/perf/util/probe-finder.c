@@ -248,11 +248,23 @@ static_var:
 	}
 
 	/* If this is based on frame buffer, set the offset */
-	if (op->atom == DW_OP_fbreg) {
+	if (op->atom == DW_OP_fbreg || op->atom == DW_OP_call_frame_cfa) {
 		if (fb_ops == NULL)
 			return -ENOTSUP;
 		ref = true;
-		offs = op->number;
+		if (op->atom == DW_OP_fbreg) {
+			offs = op->number;
+		} else if (nops == 3) {
+			/*
+			 * In the case of DW_OP_call_frame_cfa, we either have
+			 * an offset of 0 or we have two more expressions that
+			 * add a const
+			 */
+			if ((op + 1)->atom != DW_OP_consts ||
+			    (op + 2)->atom != DW_OP_plus)
+				return -ENOTSUP;
+			offs = (op + 1)->number;
+		}
 		op = &fb_ops[0];
 	}
 
