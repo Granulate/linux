@@ -137,7 +137,7 @@ $(OUTPUT)test-libopencsd.bin:
 
 DWARFLIBS := -ldw
 ifeq ($(findstring -static,${LDFLAGS}),-static)
-DWARFLIBS += -lelf -lebl -lz -llzma -lbz2
+DWARFLIBS += -lelf -lz -llzma -lbz2 -lpthread
 endif
 
 $(OUTPUT)test-dwarf.bin:
