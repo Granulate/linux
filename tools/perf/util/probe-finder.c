@@ -380,10 +380,11 @@ static int convert_variable_type(Dwarf_Die *vr_die,
 			(*ref_ptr)->user_access = user_access;
 		}
 		if (!die_compare_name(&type, "char") &&
-		    !die_compare_name(&type, "unsigned char")) {
+		    !die_compare_name(&type, "unsigned char") &&
+			!die_compare_name(&type, "uint8")) {
 			pr_warning("Failed to cast into string: "
-				   "%s is not (unsigned) char *.\n",
-				   dwarf_diename(vr_die));
+				   "%s is not (unsigned) char * or uint8 *, it is %s *.\n",
+				   dwarf_diename(vr_die), dwarf_diename(&type));
 			return -EINVAL;
 		}
 		tvar->type = strdup(cast);
