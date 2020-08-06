@@ -698,6 +698,7 @@ static int __cmd_inject(struct perf_inject *inject)
 		}
 		session->header.data_offset = output_data_offset;
 		session->header.data_size = inject->bytes_written;
+		perf_env = session->header.env;
 		perf_session__write_header(session, session->evlist, fd, true);
 	}
 
