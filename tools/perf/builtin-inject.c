@@ -767,6 +767,8 @@ static int __cmd_inject(struct perf_inject *inject)
 		return ret;
 
 	if (!data_out->is_pipe) {
+		const char **tmp;
+
 		if (inject->build_ids)
 			perf_header__set_feat(&session->header,
 					      HEADER_BUILD_ID);
@@ -791,7 +793,14 @@ static int __cmd_inject(struct perf_inject *inject)
 		}
 		session->header.data_offset = output_data_offset;
 		session->header.data_size = inject->bytes_written;
+		tmp = perf_env.cmdline_argv;
+		// cmdline read & write code is not symmetric; the cmdline we read includes the path of executed
+		// perf binary as argv[0]. when we hit write_cmdlline, we'll once again write our exe path.
+		// so skip first arg, to remove this redundancy.
+		perf_env.nr_cmdline = session->header.env.nr_cmdline - 1;
+		perf_env.cmdline_argv = session->header.env.cmdline_argv + 1;
 		perf_session__write_header(session, session->evlist, fd, true);
+		perf_env.cmdline_argv = tmp; // later code free()s it, so to avoid the double free...
 	}
 
 	return ret;
