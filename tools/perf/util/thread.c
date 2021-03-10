@@ -310,6 +310,27 @@ const char *thread__comm_str(struct thread *thread)
 	return str;
 }
 
+static const char *__thread__exec_comm_str(const struct thread *thread)
+{
+	const struct comm *comm = thread__exec_comm(thread);
+
+	if (!comm)
+		return NULL;
+
+	return comm__str(comm);
+}
+
+const char *thread__exec_comm_str(struct thread *thread)
+{
+	const char *str;
+
+	down_read(&thread->comm_lock);
+	str = __thread__exec_comm_str(thread);
+	up_read(&thread->comm_lock);
+
+	return str;
+}
+
 /* CHECKME: it should probably better return the max comm len from its comm list */
 int thread__comm_len(struct thread *thread)
 {
