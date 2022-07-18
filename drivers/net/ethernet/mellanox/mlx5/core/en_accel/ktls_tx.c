@@ -23,15 +23,18 @@ mlx5e_ktls_dumps_num_wqes(struct mlx5e_params *params, unsigned int nfrags,
 	return nfrags + DIV_ROUND_UP(sync_len, MLX5E_SW2HW_MTU(params, params->sw_mtu));
 }
 
-u16 mlx5e_ktls_get_stop_room(struct mlx5e_params *params)
+u16 mlx5e_ktls_get_stop_room(struct mlx5_core_dev *mdev, struct mlx5e_params *params)
 {
 	u16 num_dumps, stop_room = 0;
 
+	if (!mlx5e_accel_is_ktls_tx(mdev))
+		return 0;
+
 	num_dumps = mlx5e_ktls_dumps_num_wqes(params, MAX_SKB_FRAGS, TLS_MAX_PAYLOAD_SIZE);
 
-	stop_room += mlx5e_stop_room_for_wqe(MLX5E_TLS_SET_STATIC_PARAMS_WQEBBS);
-	stop_room += mlx5e_stop_room_for_wqe(MLX5E_TLS_SET_PROGRESS_PARAMS_WQEBBS);
-	stop_room += num_dumps * mlx5e_stop_room_for_wqe(MLX5E_KTLS_DUMP_WQEBBS);
+	stop_room += mlx5e_stop_room_for_wqe(mdev, MLX5E_TLS_SET_STATIC_PARAMS_WQEBBS);
+	stop_room += mlx5e_stop_room_for_wqe(mdev, MLX5E_TLS_SET_PROGRESS_PARAMS_WQEBBS);
+	stop_room += num_dumps * mlx5e_stop_room_for_wqe(mdev, MLX5E_KTLS_DUMP_WQEBBS);
 
 	return stop_room;
 }
@@ -135,6 +138,7 @@ void mlx5e_ktls_del_tx(struct net_device *netdev, struct tls_context *tls_ctx)
 	priv = netdev_priv(netdev);
 	mdev = priv->mdev;
 
+	atomic64_inc(&priv_tx->sw_stats->tx_tls_del);
 	mlx5e_destroy_tis(mdev, priv_tx->tisn);
 	mlx5_ktls_destroy_key(mdev, priv_tx->key_id);
 	kfree(priv_tx);
