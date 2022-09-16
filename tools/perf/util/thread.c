@@ -412,7 +412,7 @@ static int thread__clone_maps(struct thread *thread, struct thread *parent, bool
 int thread__fork(struct thread *thread, struct thread *parent, u64 timestamp, bool do_maps_clone)
 {
 	if (parent->comm_set) {
-		const char *comm = thread__comm_str(parent);
+		const char *comm = thread__exec_comm_str(parent);
 		int err;
 		if (!comm)
 			return -ENOMEM;
