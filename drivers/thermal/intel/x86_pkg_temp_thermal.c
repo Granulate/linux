@@ -105,7 +105,7 @@ static struct zone_device *pkg_temp_thermal_get_dev(unsigned int cpu)
 }
 
 /*
-* tj-max is is interesting because threshold is set relative to this
+* tj-max is interesting because threshold is set relative to this
 * temperature.
 */
 static int get_tj_max(int cpu, u32 *tj_max)
@@ -166,7 +166,7 @@ static int sys_get_trip_temp(struct thermal_zone_device *tzd,
 	if (thres_reg_value)
 		*temp = zonedev->tj_max - thres_reg_value * 1000;
 	else
-		*temp = 0;
+		*temp = THERMAL_TEMP_INVALID;
 	pr_debug("sys_get_trip_temp %d\n", *temp);
 
 	return 0;

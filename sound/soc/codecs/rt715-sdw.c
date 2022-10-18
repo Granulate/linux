@@ -14,6 +14,7 @@
 #include <linux/soundwire/sdw_type.h>
 #include <linux/soundwire/sdw_registers.h>
 #include <linux/module.h>
+#include <linux/pm_runtime.h>
 #include <linux/of.h>
 #include <linux/regmap.h>
 #include <sound/soc.h>
@@ -488,7 +489,7 @@ static int rt715_bus_config(struct sdw_slave *slave,
 	return 0;
 }
 
-static struct sdw_slave_ops rt715_slave_ops = {
+static const struct sdw_slave_ops rt715_slave_ops = {
 	.read_prop = rt715_read_prop,
 	.update_status = rt715_update_status,
 	.bus_config = rt715_bus_config,
@@ -510,6 +511,16 @@ static int rt715_sdw_probe(struct sdw_slave *slave,
 		return PTR_ERR(regmap);
 
 	rt715_init(&slave->dev, sdw_regmap, regmap, slave);
+
+	return 0;
+}
+
+static int rt715_sdw_remove(struct sdw_slave *slave)
+{
+	struct rt715_priv *rt715 = dev_get_drvdata(&slave->dev);
+
+	if (rt715->first_hw_init)
+		pm_runtime_disable(&slave->dev);
 
 	return 0;
 }
@@ -541,7 +552,7 @@ static int __maybe_unused rt715_dev_resume(struct device *dev)
 	struct rt715_priv *rt715 = dev_get_drvdata(dev);
 	unsigned long time;
 
-	if (!rt715->hw_init)
+	if (!rt715->first_hw_init)
 		return 0;
 
 	if (!slave->unattach_request)
@@ -575,6 +586,7 @@ static struct sdw_driver rt715_sdw_driver = {
 		   .pm = &rt715_pm,
 		   },
 	.probe = rt715_sdw_probe,
+	.remove = rt715_sdw_remove,
 	.ops = &rt715_slave_ops,
 	.id_table = rt715_id,
 };

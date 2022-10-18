@@ -99,11 +99,14 @@
 #define POWER_ENABLE			0x19
 #define TPS23861_NUM_PORTS		4
 
+#define TPS23861_GENERAL_MASK_1		0x17
+#define TPS23861_CURRENT_SHUNT_MASK	BIT(0)
+
 #define TEMPERATURE_LSB			652 /* 0.652 degrees Celsius */
 #define VOLTAGE_LSB			3662 /* 3.662 mV */
 #define SHUNT_RESISTOR_DEFAULT		255000 /* 255 mOhm */
-#define CURRENT_LSB_255			62260 /* 62.260 uA */
-#define CURRENT_LSB_250			61039 /* 61.039 uA */
+#define CURRENT_LSB_250			62260 /* 62.260 uA */
+#define CURRENT_LSB_255			61039 /* 61.039 uA */
 #define RESISTANCE_LSB			110966 /* 11.0966 Ohm*/
 #define RESISTANCE_LSB_LOW		157216 /* 15.7216 Ohm*/
 
@@ -117,6 +120,7 @@ struct tps23861_data {
 static struct regmap_config tps23861_regmap_config = {
 	.reg_bits = 8,
 	.val_bits = 8,
+	.max_register = 0x6f,
 };
 
 static int tps23861_read_temp(struct tps23861_data *data, long *val)
@@ -136,7 +140,8 @@ static int tps23861_read_temp(struct tps23861_data *data, long *val)
 static int tps23861_read_voltage(struct tps23861_data *data, int channel,
 				 long *val)
 {
-	unsigned int regval;
+	__le16 regval;
+	long raw_val;
 	int err;
 
 	if (channel < TPS23861_NUM_PORTS) {
@@ -151,7 +156,8 @@ static int tps23861_read_voltage(struct tps23861_data *data, int channel,
 	if (err < 0)
 		return err;
 
-	*val = (FIELD_GET(VOLTAGE_CURRENT_MASK, regval) * VOLTAGE_LSB) / 1000;
+	raw_val = le16_to_cpu(regval);
+	*val = (FIELD_GET(VOLTAGE_CURRENT_MASK, raw_val) * VOLTAGE_LSB) / 1000;
 
 	return 0;
 }
@@ -159,8 +165,9 @@ static int tps23861_read_voltage(struct tps23861_data *data, int channel,
 static int tps23861_read_current(struct tps23861_data *data, int channel,
 				 long *val)
 {
-	unsigned int current_lsb;
-	unsigned int regval;
+	long raw_val, current_lsb;
+	__le16 regval;
+
 	int err;
 
 	if (data->shunt_resistor == SHUNT_RESISTOR_DEFAULT)
@@ -174,7 +181,8 @@ static int tps23861_read_current(struct tps23861_data *data, int channel,
 	if (err < 0)
 		return err;
 
-	*val = (FIELD_GET(VOLTAGE_CURRENT_MASK, regval) * current_lsb) / 1000000;
+	raw_val = le16_to_cpu(regval);
+	*val = (FIELD_GET(VOLTAGE_CURRENT_MASK, raw_val) * current_lsb) / 1000000;
 
 	return 0;
 }
@@ -485,18 +493,20 @@ static char *tps23861_port_poe_plus_status(struct tps23861_data *data, int port)
 
 static int tps23861_port_resistance(struct tps23861_data *data, int port)
 {
-	u16 regval;
+	unsigned int raw_val;
+	__le16 regval;
 
 	regmap_bulk_read(data->regmap,
 			 PORT_1_RESISTANCE_LSB + PORT_N_RESISTANCE_LSB_OFFSET * (port - 1),
 			 &regval,
 			 2);
 
-	switch (FIELD_GET(PORT_RESISTANCE_RSN_MASK, regval)) {
+	raw_val = le16_to_cpu(regval);
+	switch (FIELD_GET(PORT_RESISTANCE_RSN_MASK, raw_val)) {
 	case PORT_RESISTANCE_RSN_OTHER:
-		return (FIELD_GET(PORT_RESISTANCE_MASK, regval) * RESISTANCE_LSB) / 10000;
+		return (FIELD_GET(PORT_RESISTANCE_MASK, raw_val) * RESISTANCE_LSB) / 10000;
 	case PORT_RESISTANCE_RSN_LOW:
-		return (FIELD_GET(PORT_RESISTANCE_MASK, regval) * RESISTANCE_LSB_LOW) / 10000;
+		return (FIELD_GET(PORT_RESISTANCE_MASK, raw_val) * RESISTANCE_LSB_LOW) / 10000;
 	case PORT_RESISTANCE_RSN_SHORT:
 	case PORT_RESISTANCE_RSN_OPEN:
 	default:
@@ -559,6 +569,15 @@ static int tps23861_probe(struct i2c_client *client)
 		data->shunt_resistor = shunt_resistor;
 	else
 		data->shunt_resistor = SHUNT_RESISTOR_DEFAULT;
+
+	if (data->shunt_resistor == SHUNT_RESISTOR_DEFAULT)
+		regmap_clear_bits(data->regmap,
+				  TPS23861_GENERAL_MASK_1,
+				  TPS23861_CURRENT_SHUNT_MASK);
+	else
+		regmap_set_bits(data->regmap,
+				TPS23861_GENERAL_MASK_1,
+				TPS23861_CURRENT_SHUNT_MASK);
 
 	hwmon_dev = devm_hwmon_device_register_with_info(dev, client->name,
 							 data, &tps23861_chip_info,

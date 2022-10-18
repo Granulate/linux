@@ -5,6 +5,7 @@
 #include <linux/delay.h>
 #include <linux/i2c.h>
 #include <linux/module.h>
+#include <linux/pm_runtime.h>
 #include <linux/regmap.h>
 #include <linux/slab.h>
 #include <linux/cdev.h>
@@ -204,6 +205,15 @@ SOC_SINGLE("Ramp Up Switch", MAX98373_R203F_AMP_DSP_CFG,
 	MAX98373_AMP_DSP_CFG_RMP_UP_SHIFT, 1, 0),
 SOC_SINGLE("Ramp Down Switch", MAX98373_R203F_AMP_DSP_CFG,
 	MAX98373_AMP_DSP_CFG_RMP_DN_SHIFT, 1, 0),
+/* Speaker Amplifier Overcurrent Automatic Restart Enable */
+SOC_SINGLE("OVC Autorestart Switch", MAX98373_R20FE_DEVICE_AUTO_RESTART_CFG,
+	MAX98373_OVC_AUTORESTART_SHIFT, 1, 0),
+/* Thermal Shutdown Automatic Restart Enable */
+SOC_SINGLE("THERM Autorestart Switch", MAX98373_R20FE_DEVICE_AUTO_RESTART_CFG,
+	MAX98373_THERM_AUTORESTART_SHIFT, 1, 0),
+/* Clock Monitor Automatic Restart Enable */
+SOC_SINGLE("CMON Autorestart Switch", MAX98373_R20FE_DEVICE_AUTO_RESTART_CFG,
+	MAX98373_CMON_AUTORESTART_SHIFT, 1, 0),
 SOC_SINGLE("CLK Monitor Switch", MAX98373_R20FE_DEVICE_AUTO_RESTART_CFG,
 	MAX98373_CLOCK_MON_SHIFT, 1, 0),
 SOC_SINGLE("Dither Switch", MAX98373_R203F_AMP_DSP_CFG,
@@ -392,6 +402,11 @@ static int max98373_probe(struct snd_soc_component *component)
 			MAX98373_R2021_PCM_TX_HIZ_EN_2,
 			1 << (max98373->i_slot - 8), 0);
 
+	/* enable auto restart function by default */
+	regmap_write(max98373->regmap,
+		MAX98373_R20FE_DEVICE_AUTO_RESTART_CFG,
+		0xF);
+
 	/* speaker feedback slot configuration */
 	regmap_write(max98373->regmap,
 		MAX98373_R2023_PCM_TX_SRC_2,
@@ -422,12 +437,22 @@ const struct snd_soc_component_driver soc_codec_dev_max98373 = {
 	.num_dapm_routes	= ARRAY_SIZE(max98373_audio_map),
 	.use_pmdown_time	= 1,
 	.endianness		= 1,
-	.non_legacy_dai_naming	= 1,
 };
 EXPORT_SYMBOL_GPL(soc_codec_dev_max98373);
 
+static int max98373_sdw_probe(struct snd_soc_component *component)
+{
+	int ret;
+
+	ret = pm_runtime_resume(component->dev);
+	if (ret < 0 && ret != -EACCES)
+		return ret;
+
+	return 0;
+}
+
 const struct snd_soc_component_driver soc_codec_dev_max98373_sdw = {
-	.probe			= NULL,
+	.probe			= max98373_sdw_probe,
 	.controls		= max98373_snd_controls,
 	.num_controls		= ARRAY_SIZE(max98373_snd_controls),
 	.dapm_widgets		= max98373_dapm_widgets,
@@ -436,7 +461,6 @@ const struct snd_soc_component_driver soc_codec_dev_max98373_sdw = {
 	.num_dapm_routes	= ARRAY_SIZE(max98373_audio_map),
 	.use_pmdown_time	= 1,
 	.endianness		= 1,
-	.non_legacy_dai_naming	= 1,
 };
 EXPORT_SYMBOL_GPL(soc_codec_dev_max98373_sdw);
 
