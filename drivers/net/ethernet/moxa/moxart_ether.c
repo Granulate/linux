@@ -29,12 +29,12 @@
 
 #include "moxart_ether.h"
 
-static inline void moxart_desc_write(u32 data, u32 *desc)
+static inline void moxart_desc_write(u32 data, __le32 *desc)
 {
 	*desc = cpu_to_le32(data);
 }
 
-static inline u32 moxart_desc_read(u32 *desc)
+static inline u32 moxart_desc_read(__le32 *desc)
 {
 	return le32_to_cpu(*desc);
 }
@@ -558,7 +558,7 @@ irq_map_fail:
 	return ret;
 }
 
-static int moxart_remove(struct platform_device *pdev)
+static void moxart_remove(struct platform_device *pdev)
 {
 	struct net_device *ndev = platform_get_drvdata(pdev);
 
@@ -566,8 +566,6 @@ static int moxart_remove(struct platform_device *pdev)
 	devm_free_irq(&pdev->dev, ndev->irq, ndev);
 	moxart_mac_free_memory(ndev);
 	free_netdev(ndev);
-
-	return 0;
 }
 
 static const struct of_device_id moxart_mac_match[] = {
@@ -578,7 +576,7 @@ MODULE_DEVICE_TABLE(of, moxart_mac_match);
 
 static struct platform_driver moxart_mac_driver = {
 	.probe	= moxart_mac_probe,
-	.remove	= moxart_remove,
+	.remove_new = moxart_remove,
 	.driver	= {
 		.name		= "moxart-ethernet",
 		.of_match_table	= moxart_mac_match,

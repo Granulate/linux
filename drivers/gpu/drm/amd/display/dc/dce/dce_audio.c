@@ -300,7 +300,7 @@ static void set_high_bit_rate_capable(
 	AZ_REG_WRITE(AZALIA_F0_CODEC_PIN_CONTROL_RESPONSE_HBR, value);
 }
 
-/* set video latency in in ms/2+1 */
+/* set video latency in ms/2+1 */
 static void set_video_latency(
 	struct audio *audio,
 	int latency_in_ms)
@@ -407,6 +407,10 @@ void dce_aud_az_configure(
 	bool is_ac3_supported = false;
 	union audio_sample_rates sample_rate;
 	uint32_t strlen = 0;
+
+	if (signal == SIGNAL_TYPE_VIRTUAL)
+		return;
+
 	value = AZ_REG_READ(AZALIA_F0_CODEC_PIN_CONTROL_HOT_PLUG_CONTROL);
 	set_reg_field_value(value, 1,
 			AZALIA_F0_CODEC_PIN_CONTROL_HOT_PLUG_CONTROL,

@@ -16,6 +16,7 @@ mac80211-y := \
 	s1g.o \
 	ibss.o \
 	iface.o \
+	link.o \
 	rate.o \
 	michael.o \
 	tkip.o \
@@ -63,5 +64,7 @@ rc80211_minstrel-$(CONFIG_MAC80211_DEBUGFS) += \
 	rc80211_minstrel_ht_debugfs.o
 
 mac80211-$(CONFIG_MAC80211_RC_MINSTREL) += $(rc80211_minstrel-y)
+
+obj-y += tests/
 
 ccflags-y += -DDEBUG

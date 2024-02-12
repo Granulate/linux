@@ -20,7 +20,6 @@
 #include <linux/module.h>
 #include <linux/netdevice.h>
 #include <linux/of.h>
-#include <linux/of_device.h>
 #include <linux/platform_device.h>
 
 #include <linux/can/dev.h>
@@ -860,7 +859,7 @@ static netdev_tx_t ifi_canfd_start_xmit(struct sk_buff *skb,
 	u32 txst, txid, txdlc;
 	int i;
 
-	if (can_dropped_invalid_skb(ndev, skb))
+	if (can_dev_dropped_skb(ndev, skb))
 		return NETDEV_TX_OK;
 
 	/* Check if the TX buffer is full */
@@ -973,7 +972,7 @@ static int ifi_canfd_plat_probe(struct platform_device *pdev)
 	priv->ndev = ndev;
 	priv->base = addr;
 
-	netif_napi_add(ndev, &priv->napi, ifi_canfd_poll, 64);
+	netif_napi_add(ndev, &priv->napi, ifi_canfd_poll);
 
 	priv->can.state = CAN_STATE_STOPPED;
 
@@ -1013,15 +1012,13 @@ err_reg:
 	return ret;
 }
 
-static int ifi_canfd_plat_remove(struct platform_device *pdev)
+static void ifi_canfd_plat_remove(struct platform_device *pdev)
 {
 	struct net_device *ndev = platform_get_drvdata(pdev);
 
 	unregister_candev(ndev);
 	platform_set_drvdata(pdev, NULL);
 	free_candev(ndev);
-
-	return 0;
 }
 
 static const struct of_device_id ifi_canfd_of_table[] = {
@@ -1036,7 +1033,7 @@ static struct platform_driver ifi_canfd_plat_driver = {
 		.of_match_table	= ifi_canfd_of_table,
 	},
 	.probe	= ifi_canfd_plat_probe,
-	.remove	= ifi_canfd_plat_remove,
+	.remove_new = ifi_canfd_plat_remove,
 };
 
 module_platform_driver(ifi_canfd_plat_driver);

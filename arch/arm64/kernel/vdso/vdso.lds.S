@@ -48,6 +48,11 @@ SECTIONS
 	PROVIDE (_etext = .);
 	PROVIDE (etext = .);
 
+	. = ALIGN(4);
+	.altinstructions : {
+		*(.altinstructions)
+	}
+
 	.dynamic	: { *(.dynamic) }		:text	:dynamic
 
 	.rela.dyn	: ALIGN(8) { *(.rela .rela*) }

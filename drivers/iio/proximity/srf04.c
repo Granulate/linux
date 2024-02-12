@@ -344,7 +344,7 @@ static int srf04_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static int srf04_remove(struct platform_device *pdev)
+static void srf04_remove(struct platform_device *pdev)
 {
 	struct iio_dev *indio_dev = platform_get_drvdata(pdev);
 	struct srf04_data *data = iio_priv(indio_dev);
@@ -355,11 +355,9 @@ static int srf04_remove(struct platform_device *pdev)
 		pm_runtime_disable(data->dev);
 		pm_runtime_set_suspended(data->dev);
 	}
-
-	return 0;
 }
 
-static int __maybe_unused srf04_pm_runtime_suspend(struct device *dev)
+static int  srf04_pm_runtime_suspend(struct device *dev)
 {
 	struct platform_device *pdev = container_of(dev,
 						struct platform_device, dev);
@@ -371,7 +369,7 @@ static int __maybe_unused srf04_pm_runtime_suspend(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused srf04_pm_runtime_resume(struct device *dev)
+static int srf04_pm_runtime_resume(struct device *dev)
 {
 	struct platform_device *pdev = container_of(dev,
 						struct platform_device, dev);
@@ -385,17 +383,17 @@ static int __maybe_unused srf04_pm_runtime_resume(struct device *dev)
 }
 
 static const struct dev_pm_ops srf04_pm_ops = {
-	SET_RUNTIME_PM_OPS(srf04_pm_runtime_suspend,
-				srf04_pm_runtime_resume, NULL)
+	RUNTIME_PM_OPS(srf04_pm_runtime_suspend,
+		       srf04_pm_runtime_resume, NULL)
 };
 
 static struct platform_driver srf04_driver = {
 	.probe		= srf04_probe,
-	.remove		= srf04_remove,
+	.remove_new	= srf04_remove,
 	.driver		= {
 		.name		= "srf04-gpio",
 		.of_match_table	= of_srf04_match,
-		.pm		= &srf04_pm_ops,
+		.pm		= pm_ptr(&srf04_pm_ops),
 	},
 };
 

@@ -55,6 +55,7 @@ static const guid_t ads_guid =
 	GUID_INIT(0xdbb8e3e6, 0x5886, 0x4ba6,
 		  0x87, 0x95, 0x13, 0x19, 0xf5, 0x2a, 0x96, 0x6b);
 
+/* ACPI _DSD data buffer GUID: edb12dd0-363d-4085-a3d2-49522ca160c4 */
 static const guid_t buffer_prop_guid =
 	GUID_INIT(0xedb12dd0, 0x363d, 0x4085,
 		  0xa3, 0xd2, 0x49, 0x52, 0x2c, 0xa1, 0x60, 0xc4);
@@ -304,8 +305,10 @@ static void acpi_init_of_compatible(struct acpi_device *adev)
 		ret = acpi_dev_get_property(adev, "compatible",
 					    ACPI_TYPE_STRING, &of_compatible);
 		if (ret) {
-			if (adev->parent
-			    && adev->parent->flags.of_compatible_ok)
+			struct acpi_device *parent;
+
+			parent = acpi_dev_parent(adev);
+			if (parent && parent->flags.of_compatible_ok)
 				goto out;
 
 			return;
@@ -969,60 +972,48 @@ static int acpi_data_prop_read_single(const struct acpi_device_data *data,
 				      enum dev_prop_type proptype, void *val)
 {
 	const union acpi_object *obj;
-	int ret;
+	int ret = 0;
 
-	if (proptype >= DEV_PROP_U8 && proptype <= DEV_PROP_U64) {
+	if (proptype >= DEV_PROP_U8 && proptype <= DEV_PROP_U64)
 		ret = acpi_data_get_property(data, propname, ACPI_TYPE_INTEGER, &obj);
-		if (ret)
-			return ret;
-
-		switch (proptype) {
-		case DEV_PROP_U8:
-			if (obj->integer.value > U8_MAX)
-				return -EOVERFLOW;
-
-			if (val)
-				*(u8 *)val = obj->integer.value;
-
-			break;
-		case DEV_PROP_U16:
-			if (obj->integer.value > U16_MAX)
-				return -EOVERFLOW;
-
-			if (val)
-				*(u16 *)val = obj->integer.value;
-
-			break;
-		case DEV_PROP_U32:
-			if (obj->integer.value > U32_MAX)
-				return -EOVERFLOW;
-
-			if (val)
-				*(u32 *)val = obj->integer.value;
-
-			break;
-		default:
-			if (val)
-				*(u64 *)val = obj->integer.value;
-
-			break;
-		}
-
-		if (!val)
-			return 1;
-	} else if (proptype == DEV_PROP_STRING) {
+	else if (proptype == DEV_PROP_STRING)
 		ret = acpi_data_get_property(data, propname, ACPI_TYPE_STRING, &obj);
-		if (ret)
-			return ret;
+	if (ret)
+		return ret;
 
+	switch (proptype) {
+	case DEV_PROP_U8:
+		if (obj->integer.value > U8_MAX)
+			return -EOVERFLOW;
+		if (val)
+			*(u8 *)val = obj->integer.value;
+		break;
+	case DEV_PROP_U16:
+		if (obj->integer.value > U16_MAX)
+			return -EOVERFLOW;
+		if (val)
+			*(u16 *)val = obj->integer.value;
+		break;
+	case DEV_PROP_U32:
+		if (obj->integer.value > U32_MAX)
+			return -EOVERFLOW;
+		if (val)
+			*(u32 *)val = obj->integer.value;
+		break;
+	case DEV_PROP_U64:
+		if (val)
+			*(u64 *)val = obj->integer.value;
+		break;
+	case DEV_PROP_STRING:
 		if (val)
 			*(char **)val = obj->string.pointer;
-
 		return 1;
-	} else {
-		ret = -EINVAL;
+	default:
+		return -EINVAL;
 	}
-	return ret;
+
+	/* When no storage provided return number of available values */
+	return val ? 0 : 1;
 }
 
 #define acpi_copy_property_array_uint(items, val, nval)			\
@@ -1112,25 +1103,26 @@ static int acpi_data_prop_read(const struct acpi_device_data *data,
 	switch (proptype) {
 	case DEV_PROP_STRING:
 		break;
-	case DEV_PROP_U8 ... DEV_PROP_U64:
+	default:
 		if (obj->type == ACPI_TYPE_BUFFER) {
 			if (nval > obj->buffer.length)
 				return -EOVERFLOW;
-			break;
+		} else {
+			if (nval > obj->package.count)
+				return -EOVERFLOW;
 		}
-		fallthrough;
-	default:
-		if (nval > obj->package.count)
-			return -EOVERFLOW;
 		break;
 	}
 	if (nval == 0)
 		return -EINVAL;
 
-	if (obj->type != ACPI_TYPE_BUFFER)
-		items = obj->package.elements;
-	else
+	if (obj->type == ACPI_TYPE_BUFFER) {
+		if (proptype != DEV_PROP_U8)
+			return -EPROTO;
 		items = obj;
+	} else {
+		items = obj->package.elements;
+	}
 
 	switch (proptype) {
 	case DEV_PROP_U8:
@@ -1267,10 +1259,11 @@ acpi_node_get_parent(const struct fwnode_handle *fwnode)
 		return to_acpi_data_node(fwnode)->parent;
 	}
 	if (is_acpi_device_node(fwnode)) {
-		struct device *dev = to_acpi_device_node(fwnode)->dev.parent;
+		struct acpi_device *parent;
 
-		if (dev)
-			return acpi_fwnode_handle(to_acpi_device(dev));
+		parent = acpi_dev_parent(to_acpi_device_node(fwnode));
+		if (parent)
+			return acpi_fwnode_handle(parent);
 	}
 
 	return NULL;

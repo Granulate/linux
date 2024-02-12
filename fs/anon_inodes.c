@@ -24,15 +24,15 @@
 
 #include <linux/uaccess.h>
 
-static struct vfsmount *anon_inode_mnt __read_mostly;
-static struct inode *anon_inode_inode;
+static struct vfsmount *anon_inode_mnt __ro_after_init;
+static struct inode *anon_inode_inode __ro_after_init;
 
 /*
  * anon_inodefs_dname() is called from d_path().
  */
 static char *anon_inodefs_dname(struct dentry *dentry, char *buffer, int buflen)
 {
-	return dynamic_dname(dentry, buffer, buflen, "anon_inode:%s",
+	return dynamic_dname(buffer, buflen, "anon_inode:%s",
 				dentry->d_name.name);
 }
 

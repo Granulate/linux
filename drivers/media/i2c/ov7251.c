@@ -1340,9 +1340,11 @@ static int ov7251_s_stream(struct v4l2_subdev *subdev, int enable)
 	mutex_lock(&ov7251->lock);
 
 	if (enable) {
-		ret = pm_runtime_get_sync(ov7251->dev);
-		if (ret < 0)
-			goto err_power_down;
+		ret = pm_runtime_resume_and_get(ov7251->dev);
+		if (ret) {
+			mutex_unlock(&ov7251->lock);
+			return ret;
+		}
 
 		ret = ov7251_pll_configure(ov7251);
 		if (ret) {
@@ -1767,7 +1769,7 @@ destroy_mutex:
 	return ret;
 }
 
-static int ov7251_remove(struct i2c_client *client)
+static void ov7251_remove(struct i2c_client *client)
 {
 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
 	struct ov7251 *ov7251 = to_ov7251(sd);
@@ -1781,8 +1783,6 @@ static int ov7251_remove(struct i2c_client *client)
 	if (!pm_runtime_status_suspended(ov7251->dev))
 		ov7251_set_power_off(ov7251->dev);
 	pm_runtime_set_suspended(ov7251->dev);
-
-	return 0;
 }
 
 static const struct dev_pm_ops ov7251_pm_ops = {
@@ -1808,7 +1808,7 @@ static struct i2c_driver ov7251_i2c_driver = {
 		.name  = "ov7251",
 		.pm = &ov7251_pm_ops,
 	},
-	.probe_new  = ov7251_probe,
+	.probe = ov7251_probe,
 	.remove = ov7251_remove,
 };
 

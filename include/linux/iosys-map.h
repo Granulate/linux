@@ -46,9 +46,12 @@
  *
  *	iosys_map_set_vaddr(&map, 0xdeadbeaf);
  *
- * To set an address in I/O memory, use iosys_map_set_vaddr_iomem().
+ * To set an address in I/O memory, use IOSYS_MAP_INIT_VADDR_IOMEM() or
+ * iosys_map_set_vaddr_iomem().
  *
  * .. code-block:: c
+ *
+ *	struct iosys_map map = IOSYS_MAP_INIT_VADDR_IOMEM(0xdeadbeaf);
  *
  *	iosys_map_set_vaddr_iomem(&map, 0xdeadbeaf);
  *
@@ -119,6 +122,16 @@ struct iosys_map {
 	{				\
 		.vaddr = (vaddr_),	\
 		.is_iomem = false,	\
+	}
+
+/**
+ * IOSYS_MAP_INIT_VADDR_IOMEM - Initializes struct iosys_map to an address in I/O memory
+ * @vaddr_iomem_:	An I/O-memory address
+ */
+#define IOSYS_MAP_INIT_VADDR_IOMEM(vaddr_iomem_)	\
+	{						\
+		.vaddr_iomem = (vaddr_iomem_),		\
+		.is_iomem = true,			\
 	}
 
 /**
@@ -413,7 +426,7 @@ static inline void iosys_map_memset(struct iosys_map *dst, size_t offset,
  * iosys_map_rd_field - Read a member from a struct in the iosys_map
  *
  * @map__:		The iosys_map structure
- * @struct_offset__:	Offset from the beggining of the map, where the struct
+ * @struct_offset__:	Offset from the beginning of the map, where the struct
  *			is located
  * @struct_type__:	The struct describing the layout of the mapping
  * @field__:		Member of the struct to read
@@ -481,7 +494,7 @@ static inline void iosys_map_memset(struct iosys_map *dst, size_t offset,
  * iosys_map_wr_field - Write to a member of a struct in the iosys_map
  *
  * @map__:		The iosys_map structure
- * @struct_offset__:	Offset from the beggining of the map, where the struct
+ * @struct_offset__:	Offset from the beginning of the map, where the struct
  *			is located
  * @struct_type__:	The struct describing the layout of the mapping
  * @field__:		Member of the struct to read

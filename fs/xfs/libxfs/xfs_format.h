@@ -98,7 +98,7 @@ typedef struct xfs_sb {
 	uint32_t	sb_blocksize;	/* logical block size, bytes */
 	xfs_rfsblock_t	sb_dblocks;	/* number of data blocks */
 	xfs_rfsblock_t	sb_rblocks;	/* number of realtime blocks */
-	xfs_rtblock_t	sb_rextents;	/* number of realtime extents */
+	xfs_rtbxlen_t	sb_rextents;	/* number of realtime extents */
 	uuid_t		sb_uuid;	/* user-visible file system unique id */
 	xfs_fsblock_t	sb_logstart;	/* starting block of log if internal */
 	xfs_ino_t	sb_rootino;	/* root inode number */
@@ -691,6 +691,22 @@ struct xfs_agfl {
 		   xfs_daddr_to_agno(mp, (d) + (len) - 1)))
 
 /*
+ * Realtime bitmap information is accessed by the word, which is currently
+ * stored in host-endian format.
+ */
+union xfs_rtword_raw {
+	__u32		old;
+};
+
+/*
+ * Realtime summary counts are accessed by the word, which is currently
+ * stored in host-endian format.
+ */
+union xfs_suminfo_raw {
+	__u32		old;
+};
+
+/*
  * XFS Timestamps
  * ==============
  *
@@ -1142,24 +1158,10 @@ static inline bool xfs_dinode_has_large_extent_counts(
 
 #define	XFS_BLOCKSIZE(mp)	((mp)->m_sb.sb_blocksize)
 #define	XFS_BLOCKMASK(mp)	((mp)->m_blockmask)
-#define	XFS_BLOCKWSIZE(mp)	((mp)->m_blockwsize)
-#define	XFS_BLOCKWMASK(mp)	((mp)->m_blockwmask)
 
 /*
- * RT Summary and bit manipulation macros.
+ * RT bit manipulation macros.
  */
-#define	XFS_SUMOFFS(mp,ls,bb)	((int)((ls) * (mp)->m_sb.sb_rbmblocks + (bb)))
-#define	XFS_SUMOFFSTOBLOCK(mp,s)	\
-	(((s) * (uint)sizeof(xfs_suminfo_t)) >> (mp)->m_sb.sb_blocklog)
-#define	XFS_SUMPTR(mp,bp,so)	\
-	((xfs_suminfo_t *)((bp)->b_addr + \
-		(((so) * (uint)sizeof(xfs_suminfo_t)) & XFS_BLOCKMASK(mp))))
-
-#define	XFS_BITTOBLOCK(mp,bi)	((bi) >> (mp)->m_blkbit_log)
-#define	XFS_BLOCKTOBIT(mp,bb)	((bb) << (mp)->m_blkbit_log)
-#define	XFS_BITTOWORD(mp,bi)	\
-	((int)(((bi) >> XFS_NBWORDLOG) & XFS_BLOCKWMASK(mp)))
-
 #define	XFS_RTMIN(a,b)	((a) < (b) ? (a) : (b))
 #define	XFS_RTMAX(a,b)	((a) > (b) ? (a) : (b))
 
@@ -1564,20 +1566,6 @@ struct xfs_rmap_rec {
 #define RMAPBT_UNUSED_OFFSET_BITLEN	7
 #define RMAPBT_OFFSET_BITLEN		54
 
-#define XFS_RMAP_ATTR_FORK		(1 << 0)
-#define XFS_RMAP_BMBT_BLOCK		(1 << 1)
-#define XFS_RMAP_UNWRITTEN		(1 << 2)
-#define XFS_RMAP_KEY_FLAGS		(XFS_RMAP_ATTR_FORK | \
-					 XFS_RMAP_BMBT_BLOCK)
-#define XFS_RMAP_REC_FLAGS		(XFS_RMAP_UNWRITTEN)
-struct xfs_rmap_irec {
-	xfs_agblock_t	rm_startblock;	/* extent start block */
-	xfs_extlen_t	rm_blockcount;	/* extent length */
-	uint64_t	rm_owner;	/* extent owner */
-	uint64_t	rm_offset;	/* offset within the owner */
-	unsigned int	rm_flags;	/* state flags */
-};
-
 /*
  * Key structure
  *
@@ -1626,7 +1614,7 @@ unsigned int xfs_refc_block(struct xfs_mount *mp);
  * on the startblock.  This speeds up mount time deletion of stale
  * staging extents because they're all at the right side of the tree.
  */
-#define XFS_REFC_COW_START		((xfs_agblock_t)(1U << 31))
+#define XFS_REFC_COWFLAG		(1U << 31)
 #define REFCNTBT_COWFLAG_BITLEN		1
 #define REFCNTBT_AGBLOCK_BITLEN		31
 
@@ -1638,12 +1626,6 @@ struct xfs_refcount_rec {
 
 struct xfs_refcount_key {
 	__be32		rc_startblock;	/* starting block number */
-};
-
-struct xfs_refcount_irec {
-	xfs_agblock_t	rc_startblock;	/* starting block number */
-	xfs_extlen_t	rc_blockcount;	/* count of free blocks */
-	xfs_nlink_t	rc_refcount;	/* number of inodes linked here */
 };
 
 #define MAXREFCOUNT	((xfs_nlink_t)~0U)

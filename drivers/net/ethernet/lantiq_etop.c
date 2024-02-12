@@ -470,7 +470,7 @@ ltq_etop_stop(struct net_device *dev)
 	return 0;
 }
 
-static int
+static netdev_tx_t
 ltq_etop_tx(struct sk_buff *skb, struct net_device *dev)
 {
 	int queue = skb_get_queue_mapping(skb);
@@ -485,7 +485,6 @@ ltq_etop_tx(struct sk_buff *skb, struct net_device *dev)
 	len = skb->len < ETH_ZLEN ? ETH_ZLEN : skb->len;
 
 	if ((desc->ctl & (LTQ_DMA_OWN | LTQ_DMA_C)) || ch->skb[ch->dma.desc]) {
-		dev_kfree_skb_any(skb);
 		netdev_err(dev, "tx ring full\n");
 		netif_tx_stop_queue(txq);
 		return NETDEV_TX_BUSY;
@@ -722,8 +721,7 @@ err_out:
 	return err;
 }
 
-static int
-ltq_etop_remove(struct platform_device *pdev)
+static void ltq_etop_remove(struct platform_device *pdev)
 {
 	struct net_device *dev = platform_get_drvdata(pdev);
 
@@ -733,11 +731,10 @@ ltq_etop_remove(struct platform_device *pdev)
 		ltq_etop_mdio_cleanup(dev);
 		unregister_netdev(dev);
 	}
-	return 0;
 }
 
 static struct platform_driver ltq_mii_driver = {
-	.remove = ltq_etop_remove,
+	.remove_new = ltq_etop_remove,
 	.driver = {
 		.name = "ltq_etop",
 	},

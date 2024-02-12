@@ -198,6 +198,12 @@ err:
 	return ret;
 }
 
+static u32 nvmet_connect_result(struct nvmet_ctrl *ctrl)
+{
+	return (u32)ctrl->cntlid |
+		(nvmet_has_auth(ctrl) ? NVME_CONNECT_AUTHREQ_ATR : 0);
+}
+
 static void nvmet_execute_admin_connect(struct nvmet_req *req)
 {
 	struct nvmf_connect_command *c = &req->cmd->connect;
@@ -238,6 +244,8 @@ static void nvmet_execute_admin_connect(struct nvmet_req *req)
 		goto out;
 	}
 
+	d->subsysnqn[NVMF_NQN_FIELD_LEN - 1] = '\0';
+	d->hostnqn[NVMF_NQN_FIELD_LEN - 1] = '\0';
 	status = nvmet_alloc_ctrl(d->subsysnqn, d->hostnqn, req,
 				  le32_to_cpu(c->kato), &ctrl);
 	if (status)
@@ -269,10 +277,7 @@ static void nvmet_execute_admin_connect(struct nvmet_req *req)
 		ctrl->cntlid, ctrl->subsys->subsysnqn, ctrl->hostnqn,
 		ctrl->pi_support ? " T10-PI is enabled" : "",
 		nvmet_has_auth(ctrl) ? " with DH-HMAC-CHAP" : "");
-	req->cqe->result.u16 = cpu_to_le16(ctrl->cntlid);
-
-	if (nvmet_has_auth(ctrl))
-		nvmet_init_auth(ctrl, req);
+	req->cqe->result.u32 = cpu_to_le32(nvmet_connect_result(ctrl));
 out:
 	kfree(d);
 complete:
@@ -310,6 +315,8 @@ static void nvmet_execute_io_connect(struct nvmet_req *req)
 		goto out;
 	}
 
+	d->subsysnqn[NVMF_NQN_FIELD_LEN - 1] = '\0';
+	d->hostnqn[NVMF_NQN_FIELD_LEN - 1] = '\0';
 	ctrl = nvmet_ctrl_find_get(d->subsysnqn, d->hostnqn,
 				   le16_to_cpu(d->cntlid), req);
 	if (!ctrl) {
@@ -328,14 +335,8 @@ static void nvmet_execute_io_connect(struct nvmet_req *req)
 	if (status)
 		goto out_ctrl_put;
 
-	/* pass back cntlid for successful completion */
-	req->cqe->result.u16 = cpu_to_le16(ctrl->cntlid);
-
 	pr_debug("adding queue %d to ctrl %d.\n", qid, ctrl->cntlid);
-	req->cqe->result.u16 = cpu_to_le16(ctrl->cntlid);
-	if (nvmet_has_auth(ctrl))
-		nvmet_init_auth(ctrl, req);
-
+	req->cqe->result.u32 = cpu_to_le32(nvmet_connect_result(ctrl));
 out:
 	kfree(d);
 complete:

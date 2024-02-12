@@ -2124,7 +2124,7 @@ static void qib_7322_handle_hwerrors(struct qib_devdata *dd, char *msg,
 
 	if (hwerrs & HWE_MASK(PowerOnBISTFailed)) {
 		isfatal = 1;
-		strlcpy(msg,
+		strscpy(msg,
 			"[Memory BIST test failed, InfiniPath hardware unusable]",
 			msgl);
 		/* ignore from now on, so disable until driver reloaded */
@@ -6127,7 +6127,7 @@ static int setup_txselect(const char *str, const struct kernel_param *kp)
 			TXDDS_TABLE_SZ + TXDDS_EXTRA_SZ + TXDDS_MFG_SZ);
 		return -EINVAL;
 	}
-	strncpy(txselect_list, str, ARRAY_SIZE(txselect_list) - 1);
+	strscpy(txselect_list, str, sizeof(txselect_list));
 
 	xa_for_each(&qib_dev_table, index, dd)
 		if (dd->deviceid == PCI_DEVICE_ID_QLOGIC_IB_7322)

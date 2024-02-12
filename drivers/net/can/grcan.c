@@ -30,8 +30,9 @@
 #include <linux/ethtool.h>
 #include <linux/io.h>
 #include <linux/can/dev.h>
+#include <linux/platform_device.h>
 #include <linux/spinlock.h>
-#include <linux/of_platform.h>
+#include <linux/of.h>
 #include <linux/of_irq.h>
 
 #include <linux/dma-mapping.h>
@@ -1345,7 +1346,7 @@ static netdev_tx_t grcan_start_xmit(struct sk_buff *skb,
 	unsigned long flags;
 	u32 oneshotmode = priv->can.ctrlmode & CAN_CTRLMODE_ONE_SHOT;
 
-	if (can_dropped_invalid_skb(dev, skb))
+	if (can_dev_dropped_skb(dev, skb))
 		return NETDEV_TX_OK;
 
 	/* Trying to transmit in silent mode will generate error interrupts, but
@@ -1696,7 +1697,7 @@ exit_error:
 	return err;
 }
 
-static int grcan_remove(struct platform_device *ofdev)
+static void grcan_remove(struct platform_device *ofdev)
 {
 	struct net_device *dev = platform_get_drvdata(ofdev);
 	struct grcan_priv *priv = netdev_priv(dev);
@@ -1706,8 +1707,6 @@ static int grcan_remove(struct platform_device *ofdev)
 	irq_dispose_mapping(dev->irq);
 	netif_napi_del(&priv->napi);
 	free_candev(dev);
-
-	return 0;
 }
 
 static const struct of_device_id grcan_match[] = {
@@ -1726,7 +1725,7 @@ static struct platform_driver grcan_driver = {
 		.of_match_table = grcan_match,
 	},
 	.probe = grcan_probe,
-	.remove = grcan_remove,
+	.remove_new = grcan_remove,
 };
 
 module_platform_driver(grcan_driver);

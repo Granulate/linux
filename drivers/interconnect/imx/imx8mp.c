@@ -7,7 +7,6 @@
  */
 
 #include <linux/module.h>
-#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <dt-bindings/interconnect/fsl,imx8mp.h>
 
@@ -242,7 +241,9 @@ static int imx8mp_icc_probe(struct platform_device *pdev)
 
 static int imx8mp_icc_remove(struct platform_device *pdev)
 {
-	return imx_icc_unregister(pdev);
+	imx_icc_unregister(pdev);
+
+	return 0;
 }
 
 static struct platform_driver imx8mp_icc_driver = {

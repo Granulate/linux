@@ -15,6 +15,8 @@ obj-y += chips-media/
 obj-y += intel/
 obj-y += marvell/
 obj-y += mediatek/
+obj-y += microchip/
+obj-y += nuvoton/
 obj-y += nvidia/
 obj-y += nxp/
 obj-y += qcom/
@@ -24,6 +26,7 @@ obj-y += samsung/
 obj-y += st/
 obj-y += sunxi/
 obj-y += ti/
+obj-y += verisilicon/
 obj-y += via/
 obj-y += xilinx/
 

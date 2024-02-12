@@ -22,10 +22,14 @@ place where this information is gathered.
    unshare
    spec_ctrl
    accelerators/ocxl
+   dma-buf-alloc-exchange
    ebpf/index
+   ELF
    ioctl/index
    iommu
+   iommufd
    media/index
+   netlink/index
    sysfs-platform_profile
    vduse
    futex2

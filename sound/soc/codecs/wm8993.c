@@ -1608,7 +1608,7 @@ static const struct regmap_config wm8993_regmap = {
 	.volatile_reg = wm8993_volatile,
 	.readable_reg = wm8993_readable,
 
-	.cache_type = REGCACHE_RBTREE,
+	.cache_type = REGCACHE_MAPLE,
 	.reg_defaults = wm8993_reg_defaults,
 	.num_reg_defaults = ARRAY_SIZE(wm8993_reg_defaults),
 };
@@ -1722,15 +1722,13 @@ err_enable:
 	return ret;
 }
 
-static int wm8993_i2c_remove(struct i2c_client *i2c)
+static void wm8993_i2c_remove(struct i2c_client *i2c)
 {
 	struct wm8993_priv *wm8993 = i2c_get_clientdata(i2c);
 
 	if (i2c->irq)
 		free_irq(i2c->irq, wm8993);
 	regulator_bulk_disable(ARRAY_SIZE(wm8993->supplies), wm8993->supplies);
-
-	return 0;
 }
 
 static const struct i2c_device_id wm8993_i2c_id[] = {
@@ -1743,7 +1741,7 @@ static struct i2c_driver wm8993_i2c_driver = {
 	.driver = {
 		.name = "wm8993",
 	},
-	.probe_new = wm8993_i2c_probe,
+	.probe =    wm8993_i2c_probe,
 	.remove =   wm8993_i2c_remove,
 	.id_table = wm8993_i2c_id,
 };

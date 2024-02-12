@@ -30,6 +30,7 @@
 #include <linux/sched.h>
 #include <linux/seq_file.h>
 #include <linux/string_helpers.h>
+#include <linux/dynamic_debug.h>
 
 #include <drm/display/drm_dp_helper.h>
 #include <drm/display/drm_dp_mst_helper.h>
@@ -39,6 +40,18 @@
 #include <drm/drm_panel.h>
 
 #include "drm_dp_helper_internal.h"
+
+DECLARE_DYNDBG_CLASSMAP(drm_debug_classes, DD_CLASS_TYPE_DISJOINT_BITS, 0,
+			"DRM_UT_CORE",
+			"DRM_UT_DRIVER",
+			"DRM_UT_KMS",
+			"DRM_UT_PRIME",
+			"DRM_UT_ATOMIC",
+			"DRM_UT_VBL",
+			"DRM_UT_STATE",
+			"DRM_UT_LEASE",
+			"DRM_UT_DP",
+			"DRM_UT_DRMRES");
 
 struct dp_aux_backlight {
 	struct backlight_device *base;
@@ -390,6 +403,38 @@ void drm_dp_link_train_channel_eq_delay(const struct drm_dp_aux *aux,
 }
 EXPORT_SYMBOL(drm_dp_link_train_channel_eq_delay);
 
+/**
+ * drm_dp_phy_name() - Get the name of the given DP PHY
+ * @dp_phy: The DP PHY identifier
+ *
+ * Given the @dp_phy, get a user friendly name of the DP PHY, either "DPRX" or
+ * "LTTPR <N>", or "<INVALID DP PHY>" on errors. The returned string is always
+ * non-NULL and valid.
+ *
+ * Returns: Name of the DP PHY.
+ */
+const char *drm_dp_phy_name(enum drm_dp_phy dp_phy)
+{
+	static const char * const phy_names[] = {
+		[DP_PHY_DPRX] = "DPRX",
+		[DP_PHY_LTTPR1] = "LTTPR 1",
+		[DP_PHY_LTTPR2] = "LTTPR 2",
+		[DP_PHY_LTTPR3] = "LTTPR 3",
+		[DP_PHY_LTTPR4] = "LTTPR 4",
+		[DP_PHY_LTTPR5] = "LTTPR 5",
+		[DP_PHY_LTTPR6] = "LTTPR 6",
+		[DP_PHY_LTTPR7] = "LTTPR 7",
+		[DP_PHY_LTTPR8] = "LTTPR 8",
+	};
+
+	if (dp_phy < 0 || dp_phy >= ARRAY_SIZE(phy_names) ||
+	    WARN_ON(!phy_names[dp_phy]))
+		return "<INVALID DP PHY>";
+
+	return phy_names[dp_phy];
+}
+EXPORT_SYMBOL(drm_dp_phy_name);
+
 void drm_dp_lttpr_link_train_clock_recovery_delay(void)
 {
 	usleep_range(100, 200);
@@ -701,8 +746,11 @@ int drm_dp_dpcd_read_phy_link_status(struct drm_dp_aux *aux,
 }
 EXPORT_SYMBOL(drm_dp_dpcd_read_phy_link_status);
 
-static bool is_edid_digital_input_dp(const struct edid *edid)
+static bool is_edid_digital_input_dp(const struct drm_edid *drm_edid)
 {
+	/* FIXME: get rid of drm_edid_raw() */
+	const struct edid *edid = drm_edid_raw(drm_edid);
+
 	return edid && edid->revision >= 4 &&
 		edid->input & DRM_EDID_INPUT_DIGITAL &&
 		(edid->input & DRM_EDID_DIGITAL_TYPE_MASK) == DRM_EDID_DIGITAL_TYPE_DP;
@@ -734,13 +782,13 @@ EXPORT_SYMBOL(drm_dp_downstream_is_type);
  * drm_dp_downstream_is_tmds() - is the downstream facing port TMDS?
  * @dpcd: DisplayPort configuration data
  * @port_cap: port capabilities
- * @edid: EDID
+ * @drm_edid: EDID
  *
  * Returns: whether the downstream facing port is TMDS (HDMI/DVI).
  */
 bool drm_dp_downstream_is_tmds(const u8 dpcd[DP_RECEIVER_CAP_SIZE],
 			       const u8 port_cap[4],
-			       const struct edid *edid)
+			       const struct drm_edid *drm_edid)
 {
 	if (dpcd[DP_DPCD_REV] < 0x11) {
 		switch (dpcd[DP_DOWNSTREAMPORT_PRESENT] & DP_DWN_STRM_PORT_TYPE_MASK) {
@@ -753,7 +801,7 @@ bool drm_dp_downstream_is_tmds(const u8 dpcd[DP_RECEIVER_CAP_SIZE],
 
 	switch (port_cap[0] & DP_DS_PORT_TYPE_MASK) {
 	case DP_DS_PORT_TYPE_DP_DUALMODE:
-		if (is_edid_digital_input_dp(edid))
+		if (is_edid_digital_input_dp(drm_edid))
 			return false;
 		fallthrough;
 	case DP_DS_PORT_TYPE_DVI:
@@ -991,14 +1039,14 @@ EXPORT_SYMBOL(drm_dp_downstream_max_dotclock);
  * drm_dp_downstream_max_tmds_clock() - extract downstream facing port max TMDS clock
  * @dpcd: DisplayPort configuration data
  * @port_cap: port capabilities
- * @edid: EDID
+ * @drm_edid: EDID
  *
  * Returns: HDMI/DVI downstream facing port max TMDS clock in kHz on success,
  * or 0 if max TMDS clock not defined
  */
 int drm_dp_downstream_max_tmds_clock(const u8 dpcd[DP_RECEIVER_CAP_SIZE],
 				     const u8 port_cap[4],
-				     const struct edid *edid)
+				     const struct drm_edid *drm_edid)
 {
 	if (!drm_dp_is_branch(dpcd))
 		return 0;
@@ -1014,7 +1062,7 @@ int drm_dp_downstream_max_tmds_clock(const u8 dpcd[DP_RECEIVER_CAP_SIZE],
 
 	switch (port_cap[0] & DP_DS_PORT_TYPE_MASK) {
 	case DP_DS_PORT_TYPE_DP_DUALMODE:
-		if (is_edid_digital_input_dp(edid))
+		if (is_edid_digital_input_dp(drm_edid))
 			return 0;
 		/*
 		 * It's left up to the driver to check the
@@ -1056,14 +1104,14 @@ EXPORT_SYMBOL(drm_dp_downstream_max_tmds_clock);
  * drm_dp_downstream_min_tmds_clock() - extract downstream facing port min TMDS clock
  * @dpcd: DisplayPort configuration data
  * @port_cap: port capabilities
- * @edid: EDID
+ * @drm_edid: EDID
  *
  * Returns: HDMI/DVI downstream facing port min TMDS clock in kHz on success,
  * or 0 if max TMDS clock not defined
  */
 int drm_dp_downstream_min_tmds_clock(const u8 dpcd[DP_RECEIVER_CAP_SIZE],
 				     const u8 port_cap[4],
-				     const struct edid *edid)
+				     const struct drm_edid *drm_edid)
 {
 	if (!drm_dp_is_branch(dpcd))
 		return 0;
@@ -1079,7 +1127,7 @@ int drm_dp_downstream_min_tmds_clock(const u8 dpcd[DP_RECEIVER_CAP_SIZE],
 
 	switch (port_cap[0] & DP_DS_PORT_TYPE_MASK) {
 	case DP_DS_PORT_TYPE_DP_DUALMODE:
-		if (is_edid_digital_input_dp(edid))
+		if (is_edid_digital_input_dp(drm_edid))
 			return 0;
 		fallthrough;
 	case DP_DS_PORT_TYPE_DVI:
@@ -1100,13 +1148,13 @@ EXPORT_SYMBOL(drm_dp_downstream_min_tmds_clock);
  *                               bits per component
  * @dpcd: DisplayPort configuration data
  * @port_cap: downstream facing port capabilities
- * @edid: EDID
+ * @drm_edid: EDID
  *
  * Returns: Max bpc on success or 0 if max bpc not defined
  */
 int drm_dp_downstream_max_bpc(const u8 dpcd[DP_RECEIVER_CAP_SIZE],
 			      const u8 port_cap[4],
-			      const struct edid *edid)
+			      const struct drm_edid *drm_edid)
 {
 	if (!drm_dp_is_branch(dpcd))
 		return 0;
@@ -1124,7 +1172,7 @@ int drm_dp_downstream_max_bpc(const u8 dpcd[DP_RECEIVER_CAP_SIZE],
 	case DP_DS_PORT_TYPE_DP:
 		return 0;
 	case DP_DS_PORT_TYPE_DP_DUALMODE:
-		if (is_edid_digital_input_dp(edid))
+		if (is_edid_digital_input_dp(drm_edid))
 			return 0;
 		fallthrough;
 	case DP_DS_PORT_TYPE_HDMI:
@@ -1317,14 +1365,14 @@ EXPORT_SYMBOL(drm_dp_downstream_id);
  * @m: pointer for debugfs file
  * @dpcd: DisplayPort configuration data
  * @port_cap: port capabilities
- * @edid: EDID
+ * @drm_edid: EDID
  * @aux: DisplayPort AUX channel
  *
  */
 void drm_dp_downstream_debug(struct seq_file *m,
 			     const u8 dpcd[DP_RECEIVER_CAP_SIZE],
 			     const u8 port_cap[4],
-			     const struct edid *edid,
+			     const struct drm_edid *drm_edid,
 			     struct drm_dp_aux *aux)
 {
 	bool detailed_cap_info = dpcd[DP_DOWNSTREAMPORT_PRESENT] &
@@ -1387,15 +1435,15 @@ void drm_dp_downstream_debug(struct seq_file *m,
 		if (clk > 0)
 			seq_printf(m, "\t\tMax dot clock: %d kHz\n", clk);
 
-		clk = drm_dp_downstream_max_tmds_clock(dpcd, port_cap, edid);
+		clk = drm_dp_downstream_max_tmds_clock(dpcd, port_cap, drm_edid);
 		if (clk > 0)
 			seq_printf(m, "\t\tMax TMDS clock: %d kHz\n", clk);
 
-		clk = drm_dp_downstream_min_tmds_clock(dpcd, port_cap, edid);
+		clk = drm_dp_downstream_min_tmds_clock(dpcd, port_cap, drm_edid);
 		if (clk > 0)
 			seq_printf(m, "\t\tMin TMDS clock: %d kHz\n", clk);
 
-		bpc = drm_dp_downstream_max_bpc(dpcd, port_cap, edid);
+		bpc = drm_dp_downstream_max_bpc(dpcd, port_cap, drm_edid);
 
 		if (bpc > 0)
 			seq_printf(m, "\t\tMax bpc: %d\n", bpc);
@@ -1597,7 +1645,7 @@ static int drm_dp_aux_reply_duration(const struct drm_dp_aux_msg *msg)
 
 /*
  * Calculate the length of the i2c transfer in usec, assuming
- * the i2c bus speed is as specified. Gives the the "worst"
+ * the i2c bus speed is as specified. Gives the "worst"
  * case estimate, ie. successful while as long as possible.
  * Doesn't account the "MOT" bit, and instead assumes each
  * message includes a START, ADDRESS and STOP. Neither does it
@@ -2058,7 +2106,7 @@ int drm_dp_aux_register(struct drm_dp_aux *aux)
 	aux->ddc.owner = THIS_MODULE;
 	aux->ddc.dev.parent = aux->dev;
 
-	strlcpy(aux->ddc.name, aux->name ? aux->name : dev_name(aux->dev),
+	strscpy(aux->ddc.name, aux->name ? aux->name : dev_name(aux->dev),
 		sizeof(aux->ddc.name));
 
 	ret = drm_dp_aux_register_devnode(aux);
@@ -2404,12 +2452,16 @@ int drm_dp_dsc_sink_supported_input_bpcs(const u8 dsc_dpcd[DP_DSC_RECEIVER_CAP_S
 	int num_bpc = 0;
 	u8 color_depth = dsc_dpcd[DP_DSC_DEC_COLOR_DEPTH_CAP - DP_DSC_SUPPORT];
 
+	if (!drm_dp_sink_supports_dsc(dsc_dpcd))
+		return 0;
+
 	if (color_depth & DP_DSC_12_BPC)
 		dsc_bpc[num_bpc++] = 12;
 	if (color_depth & DP_DSC_10_BPC)
 		dsc_bpc[num_bpc++] = 10;
-	if (color_depth & DP_DSC_8_BPC)
-		dsc_bpc[num_bpc++] = 8;
+
+	/* A DP DSC Sink device shall support 8 bpc. */
+	dsc_bpc[num_bpc++] = 8;
 
 	return num_bpc;
 }
@@ -2638,16 +2690,7 @@ int drm_dp_set_phy_test_pattern(struct drm_dp_aux *aux,
 				struct drm_dp_phy_test_params *data, u8 dp_rev)
 {
 	int err, i;
-	u8 link_config[2];
 	u8 test_pattern;
-
-	link_config[0] = drm_dp_link_rate_to_bw_code(data->link_rate);
-	link_config[1] = data->num_lanes;
-	if (data->enhanced_frame_cap)
-		link_config[1] |= DP_LANE_COUNT_ENHANCED_FRAME_EN;
-	err = drm_dp_dpcd_write(aux, DP_LINK_BW_SET, link_config, 2);
-	if (err < 0)
-		return err;
 
 	test_pattern = data->phy_pattern;
 	if (dp_rev < 0x12) {

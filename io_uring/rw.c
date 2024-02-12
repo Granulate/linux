@@ -33,6 +33,46 @@ static inline bool io_file_supports_nowait(struct io_kiocb *req)
 	return req->flags & REQ_F_SUPPORT_NOWAIT;
 }
 
+#ifdef CONFIG_COMPAT
+static int io_iov_compat_buffer_select_prep(struct io_rw *rw)
+{
+	struct compat_iovec __user *uiov;
+	compat_ssize_t clen;
+
+	uiov = u64_to_user_ptr(rw->addr);
+	if (!access_ok(uiov, sizeof(*uiov)))
+		return -EFAULT;
+	if (__get_user(clen, &uiov->iov_len))
+		return -EFAULT;
+	if (clen < 0)
+		return -EINVAL;
+
+	rw->len = clen;
+	return 0;
+}
+#endif
+
+static int io_iov_buffer_select_prep(struct io_kiocb *req)
+{
+	struct iovec __user *uiov;
+	struct iovec iov;
+	struct io_rw *rw = io_kiocb_to_cmd(req, struct io_rw);
+
+	if (rw->len != 1)
+		return -EINVAL;
+
+#ifdef CONFIG_COMPAT
+	if (req->ctx->compat)
+		return io_iov_compat_buffer_select_prep(rw);
+#endif
+
+	uiov = u64_to_user_ptr(rw->addr);
+	if (copy_from_user(&iov, uiov, sizeof(*uiov)))
+		return -EFAULT;
+	rw->len = iov.iov_len;
+	return 0;
+}
+
 int io_prep_rw(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 {
 	struct io_rw *rw = io_kiocb_to_cmd(req, struct io_rw);
@@ -42,18 +82,6 @@ int io_prep_rw(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 	rw->kiocb.ki_pos = READ_ONCE(sqe->off);
 	/* used for fixed read/write too - just read unconditionally */
 	req->buf_index = READ_ONCE(sqe->buf_index);
-
-	if (req->opcode == IORING_OP_READ_FIXED ||
-	    req->opcode == IORING_OP_WRITE_FIXED) {
-		struct io_ring_ctx *ctx = req->ctx;
-		u16 index;
-
-		if (unlikely(req->buf_index >= ctx->nr_user_bufs))
-			return -EFAULT;
-		index = array_index_nospec(req->buf_index, ctx->nr_user_bufs);
-		req->imu = ctx->user_bufs[index];
-		io_req_set_rsrc_node(req, ctx, 0);
-	}
 
 	ioprio = READ_ONCE(sqe->ioprio);
 	if (ioprio) {
@@ -65,10 +93,71 @@ int io_prep_rw(struct io_kiocb *req, const struct io_uring_sqe *sqe)
 	} else {
 		rw->kiocb.ki_ioprio = get_current_ioprio();
 	}
+	rw->kiocb.dio_complete = NULL;
 
 	rw->addr = READ_ONCE(sqe->addr);
 	rw->len = READ_ONCE(sqe->len);
 	rw->flags = READ_ONCE(sqe->rw_flags);
+	return 0;
+}
+
+int io_prep_rwv(struct io_kiocb *req, const struct io_uring_sqe *sqe)
+{
+	int ret;
+
+	ret = io_prep_rw(req, sqe);
+	if (unlikely(ret))
+		return ret;
+
+	/*
+	 * Have to do this validation here, as this is in io_read() rw->len
+	 * might have chanaged due to buffer selection
+	 */
+	if (req->flags & REQ_F_BUFFER_SELECT)
+		return io_iov_buffer_select_prep(req);
+
+	return 0;
+}
+
+int io_prep_rw_fixed(struct io_kiocb *req, const struct io_uring_sqe *sqe)
+{
+	struct io_ring_ctx *ctx = req->ctx;
+	u16 index;
+	int ret;
+
+	ret = io_prep_rw(req, sqe);
+	if (unlikely(ret))
+		return ret;
+
+	if (unlikely(req->buf_index >= ctx->nr_user_bufs))
+		return -EFAULT;
+	index = array_index_nospec(req->buf_index, ctx->nr_user_bufs);
+	req->imu = ctx->user_bufs[index];
+	io_req_set_rsrc_node(req, ctx, 0);
+	return 0;
+}
+
+/*
+ * Multishot read is prepared just like a normal read/write request, only
+ * difference is that we set the MULTISHOT flag.
+ */
+int io_read_mshot_prep(struct io_kiocb *req, const struct io_uring_sqe *sqe)
+{
+	struct io_rw *rw = io_kiocb_to_cmd(req, struct io_rw);
+	int ret;
+
+	/* must be used with provided buffers */
+	if (!(req->flags & REQ_F_BUFFER_SELECT))
+		return -EINVAL;
+
+	ret = io_prep_rw(req, sqe);
+	if (unlikely(ret))
+		return ret;
+
+	if (rw->addr || rw->len)
+		return -EINVAL;
+
+	req->flags |= REQ_F_APOLL_MULTISHOT;
 	return 0;
 }
 
@@ -170,33 +259,41 @@ static bool io_rw_should_reissue(struct io_kiocb *req)
 }
 #endif
 
-static void kiocb_end_write(struct io_kiocb *req)
+static void io_req_end_write(struct io_kiocb *req)
 {
-	/*
-	 * Tell lockdep we inherited freeze protection from submission
-	 * thread.
-	 */
 	if (req->flags & REQ_F_ISREG) {
-		struct super_block *sb = file_inode(req->file)->i_sb;
+		struct io_rw *rw = io_kiocb_to_cmd(req, struct io_rw);
 
-		__sb_writers_acquired(sb, SB_FREEZE_WRITE);
-		sb_end_write(sb);
+		kiocb_end_write(&rw->kiocb);
+	}
+}
+
+/*
+ * Trigger the notifications after having done some IO, and finish the write
+ * accounting, if any.
+ */
+static void io_req_io_end(struct io_kiocb *req)
+{
+	struct io_rw *rw = io_kiocb_to_cmd(req, struct io_rw);
+
+	if (rw->kiocb.ki_flags & IOCB_WRITE) {
+		io_req_end_write(req);
+		fsnotify_modify(req->file);
+	} else {
+		fsnotify_access(req->file);
 	}
 }
 
 static bool __io_complete_rw_common(struct io_kiocb *req, long res)
 {
-	struct io_rw *rw = io_kiocb_to_cmd(req, struct io_rw);
-
-	if (rw->kiocb.ki_flags & IOCB_WRITE) {
-		kiocb_end_write(req);
-		fsnotify_modify(req->file);
-	} else {
-		fsnotify_access(req->file);
-	}
 	if (unlikely(res != req->cqe.res)) {
 		if ((res == -EAGAIN || res == -EOPNOTSUPP) &&
 		    io_rw_should_reissue(req)) {
+			/*
+			 * Reissue will start accounting again, finish the
+			 * current cycle.
+			 */
+			io_req_io_end(req);
 			req->flags |= REQ_F_REISSUE | REQ_F_PARTIAL_IO;
 			return true;
 		}
@@ -220,16 +317,39 @@ static inline int io_fixup_rw_res(struct io_kiocb *req, long res)
 	return res;
 }
 
+void io_req_rw_complete(struct io_kiocb *req, struct io_tw_state *ts)
+{
+	struct io_rw *rw = io_kiocb_to_cmd(req, struct io_rw);
+	struct kiocb *kiocb = &rw->kiocb;
+
+	if ((kiocb->ki_flags & IOCB_DIO_CALLER_COMP) && kiocb->dio_complete) {
+		long res = kiocb->dio_complete(rw->kiocb.private);
+
+		io_req_set_res(req, io_fixup_rw_res(req, res), 0);
+	}
+
+	io_req_io_end(req);
+
+	if (req->flags & (REQ_F_BUFFER_SELECTED|REQ_F_BUFFER_RING)) {
+		unsigned issue_flags = ts->locked ? 0 : IO_URING_F_UNLOCKED;
+
+		req->cqe.flags |= io_put_kbuf(req, issue_flags);
+	}
+	io_req_task_complete(req, ts);
+}
+
 static void io_complete_rw(struct kiocb *kiocb, long res)
 {
 	struct io_rw *rw = container_of(kiocb, struct io_rw, kiocb);
 	struct io_kiocb *req = cmd_to_io_kiocb(rw);
 
-	if (__io_complete_rw_common(req, res))
-		return;
-	io_req_set_res(req, io_fixup_rw_res(req, res), 0);
-	req->io_task_work.func = io_req_task_complete;
-	io_req_task_work_add(req);
+	if (!kiocb->dio_complete || !(kiocb->ki_flags & IOCB_DIO_CALLER_COMP)) {
+		if (__io_complete_rw_common(req, res))
+			return;
+		io_req_set_res(req, io_fixup_rw_res(req, res), 0);
+	}
+	req->io_task_work.func = io_req_rw_complete;
+	__io_req_task_work_add(req, IOU_F_TWQ_LAZY_WAKE);
 }
 
 static void io_complete_rw_iopoll(struct kiocb *kiocb, long res)
@@ -238,7 +358,7 @@ static void io_complete_rw_iopoll(struct kiocb *kiocb, long res)
 	struct io_kiocb *req = cmd_to_io_kiocb(rw);
 
 	if (kiocb->ki_flags & IOCB_WRITE)
-		kiocb_end_write(req);
+		io_req_end_write(req);
 	if (unlikely(res != req->cqe.res)) {
 		if (res == -EAGAIN && io_rw_should_reissue(req)) {
 			req->flags |= REQ_F_REISSUE | REQ_F_PARTIAL_IO;
@@ -257,10 +377,15 @@ static int kiocb_done(struct io_kiocb *req, ssize_t ret,
 	struct io_rw *rw = io_kiocb_to_cmd(req, struct io_rw);
 	unsigned final_ret = io_fixup_rw_res(req, ret);
 
-	if (req->flags & REQ_F_CUR_POS)
+	if (ret >= 0 && req->flags & REQ_F_CUR_POS)
 		req->file->f_pos = rw->kiocb.ki_pos;
 	if (ret >= 0 && (rw->kiocb.ki_complete == io_complete_rw)) {
 		if (!__io_complete_rw_common(req, ret)) {
+			/*
+			 * Safe to call io_end from here as we're inline
+			 * from the submission path.
+			 */
+			io_req_io_end(req);
 			io_req_set_res(req, final_ret,
 				       io_put_kbuf(req, issue_flags));
 			return IOU_OK;
@@ -277,79 +402,6 @@ static int kiocb_done(struct io_kiocb *req, ssize_t ret,
 			io_req_task_queue_fail(req, final_ret);
 	}
 	return IOU_ISSUE_SKIP_COMPLETE;
-}
-
-#ifdef CONFIG_COMPAT
-static ssize_t io_compat_import(struct io_kiocb *req, struct iovec *iov,
-				unsigned int issue_flags)
-{
-	struct io_rw *rw = io_kiocb_to_cmd(req, struct io_rw);
-	struct compat_iovec __user *uiov;
-	compat_ssize_t clen;
-	void __user *buf;
-	size_t len;
-
-	uiov = u64_to_user_ptr(rw->addr);
-	if (!access_ok(uiov, sizeof(*uiov)))
-		return -EFAULT;
-	if (__get_user(clen, &uiov->iov_len))
-		return -EFAULT;
-	if (clen < 0)
-		return -EINVAL;
-
-	len = clen;
-	buf = io_buffer_select(req, &len, issue_flags);
-	if (!buf)
-		return -ENOBUFS;
-	rw->addr = (unsigned long) buf;
-	iov[0].iov_base = buf;
-	rw->len = iov[0].iov_len = (compat_size_t) len;
-	return 0;
-}
-#endif
-
-static ssize_t __io_iov_buffer_select(struct io_kiocb *req, struct iovec *iov,
-				      unsigned int issue_flags)
-{
-	struct io_rw *rw = io_kiocb_to_cmd(req, struct io_rw);
-	struct iovec __user *uiov = u64_to_user_ptr(rw->addr);
-	void __user *buf;
-	ssize_t len;
-
-	if (copy_from_user(iov, uiov, sizeof(*uiov)))
-		return -EFAULT;
-
-	len = iov[0].iov_len;
-	if (len < 0)
-		return -EINVAL;
-	buf = io_buffer_select(req, &len, issue_flags);
-	if (!buf)
-		return -ENOBUFS;
-	rw->addr = (unsigned long) buf;
-	iov[0].iov_base = buf;
-	rw->len = iov[0].iov_len = len;
-	return 0;
-}
-
-static ssize_t io_iov_buffer_select(struct io_kiocb *req, struct iovec *iov,
-				    unsigned int issue_flags)
-{
-	struct io_rw *rw = io_kiocb_to_cmd(req, struct io_rw);
-
-	if (req->flags & (REQ_F_BUFFER_SELECTED|REQ_F_BUFFER_RING)) {
-		iov[0].iov_base = u64_to_user_ptr(rw->addr);
-		iov[0].iov_len = rw->len;
-		return 0;
-	}
-	if (rw->len != 1)
-		return -EINVAL;
-
-#ifdef CONFIG_COMPAT
-	if (req->ctx->compat)
-		return io_compat_import(req, iov, issue_flags);
-#endif
-
-	return __io_iov_buffer_select(req, iov, issue_flags);
 }
 
 static struct iovec *__io_import_iovec(int ddir, struct io_kiocb *req,
@@ -374,7 +426,7 @@ static struct iovec *__io_import_iovec(int ddir, struct io_kiocb *req,
 	buf = u64_to_user_ptr(rw->addr);
 	sqe_len = rw->len;
 
-	if (opcode == IORING_OP_READ || opcode == IORING_OP_WRITE) {
+	if (!io_issue_defs[opcode].vectored || req->flags & REQ_F_BUFFER_SELECT) {
 		if (io_do_buffer_select(req)) {
 			buf = io_buffer_select(req, &sqe_len, issue_flags);
 			if (!buf)
@@ -383,21 +435,13 @@ static struct iovec *__io_import_iovec(int ddir, struct io_kiocb *req,
 			rw->len = sqe_len;
 		}
 
-		ret = import_single_range(ddir, buf, sqe_len, s->fast_iov, iter);
+		ret = import_ubuf(ddir, buf, sqe_len, iter);
 		if (ret)
 			return ERR_PTR(ret);
 		return NULL;
 	}
 
 	iovec = s->fast_iov;
-	if (req->flags & REQ_F_BUFFER_SELECT) {
-		ret = io_iov_buffer_select(req, iovec, issue_flags);
-		if (ret)
-			return ERR_PTR(ret);
-		iov_iter_init(iter, ddir, iovec, 1, iovec->iov_len);
-		return NULL;
-	}
-
 	ret = __import_iovec(ddir, buf, sqe_len, UIO_FASTIOV, &iovec, iter,
 			      req->ctx->compat);
 	if (unlikely(ret < 0))
@@ -410,7 +454,7 @@ static inline int io_import_iovec(int rw, struct io_kiocb *req,
 				  unsigned int issue_flags)
 {
 	*iovec = __io_import_iovec(rw, req, s, issue_flags);
-	if (unlikely(IS_ERR(*iovec)))
+	if (IS_ERR(*iovec))
 		return PTR_ERR(*iovec);
 
 	iov_iter_save_state(&s->iter, &s->iter_state);
@@ -447,23 +491,25 @@ static ssize_t loop_rw_iter(int ddir, struct io_rw *rw, struct iov_iter *iter)
 	ppos = io_kiocb_ppos(kiocb);
 
 	while (iov_iter_count(iter)) {
-		struct iovec iovec;
+		void __user *addr;
+		size_t len;
 		ssize_t nr;
 
-		if (!iov_iter_is_bvec(iter)) {
-			iovec = iov_iter_iovec(iter);
+		if (iter_is_ubuf(iter)) {
+			addr = iter->ubuf + iter->iov_offset;
+			len = iov_iter_count(iter);
+		} else if (!iov_iter_is_bvec(iter)) {
+			addr = iter_iov_addr(iter);
+			len = iter_iov_len(iter);
 		} else {
-			iovec.iov_base = u64_to_user_ptr(rw->addr);
-			iovec.iov_len = rw->len;
+			addr = u64_to_user_ptr(rw->addr);
+			len = rw->len;
 		}
 
-		if (ddir == READ) {
-			nr = file->f_op->read(file, iovec.iov_base,
-					      iovec.iov_len, ppos);
-		} else {
-			nr = file->f_op->write(file, iovec.iov_base,
-					       iovec.iov_len, ppos);
-		}
+		if (ddir == READ)
+			nr = file->f_op->read(file, addr, len, ppos);
+		else
+			nr = file->f_op->write(file, addr, len, ppos);
 
 		if (nr < 0) {
 			if (!ret)
@@ -479,7 +525,7 @@ static ssize_t loop_rw_iter(int ddir, struct io_rw *rw, struct iov_iter *iter)
 			if (!rw->len)
 				break;
 		}
-		if (nr != iovec.iov_len)
+		if (nr != len)
 			break;
 	}
 
@@ -495,15 +541,15 @@ static void io_req_map_rw(struct io_kiocb *req, const struct iovec *iovec,
 	io->free_iovec = iovec;
 	io->bytes_done = 0;
 	/* can only be fixed buffers, no need to do anything */
-	if (iov_iter_is_bvec(iter))
+	if (iov_iter_is_bvec(iter) || iter_is_ubuf(iter))
 		return;
 	if (!iovec) {
 		unsigned iov_off = 0;
 
-		io->s.iter.iov = io->s.fast_iov;
-		if (iter->iov != fast_iov) {
-			iov_off = iter->iov - fast_iov;
-			io->s.iter.iov += iov_off;
+		io->s.iter.__iov = io->s.fast_iov;
+		if (iter->__iov != fast_iov) {
+			iov_off = iter_iov(iter) - fast_iov;
+			io->s.iter.__iov += iov_off;
 		}
 		if (io->s.fast_iov != fast_iov)
 			memcpy(io->s.fast_iov + iov_off, fast_iov + iov_off,
@@ -516,7 +562,10 @@ static void io_req_map_rw(struct io_kiocb *req, const struct iovec *iovec,
 static int io_setup_async_rw(struct io_kiocb *req, const struct iovec *iovec,
 			     struct io_rw_state *s, bool force)
 {
-	if (!force && !io_op_defs[req->opcode].prep_async)
+	if (!force && !io_cold_defs[req->opcode].prep_async)
+		return 0;
+	/* opcode type doesn't need async data */
+	if (!io_cold_defs[req->opcode].async_size)
 		return 0;
 	if (!req_has_async_data(req)) {
 		struct io_async_rw *iorw;
@@ -554,12 +603,12 @@ static inline int io_rw_prep_async(struct io_kiocb *req, int rw)
 
 int io_readv_prep_async(struct io_kiocb *req)
 {
-	return io_rw_prep_async(req, READ);
+	return io_rw_prep_async(req, ITER_DEST);
 }
 
 int io_writev_prep_async(struct io_kiocb *req)
 {
-	return io_rw_prep_async(req, WRITE);
+	return io_rw_prep_async(req, ITER_SOURCE);
 }
 
 /*
@@ -664,13 +713,14 @@ static int io_rw_init_file(struct io_kiocb *req, fmode_t mode)
 	if (unlikely(!file || !(file->f_mode & mode)))
 		return -EBADF;
 
-	if (!io_req_ffs_set(req))
-		req->flags |= io_file_get_flags(file) << REQ_F_SUPPORT_NOWAIT_BIT;
+	if (!(req->flags & REQ_F_FIXED_FILE))
+		req->flags |= io_file_get_flags(file);
 
 	kiocb->ki_flags = file->f_iocb_flags;
 	ret = kiocb_set_rw_flags(kiocb, rw->flags);
 	if (unlikely(ret))
 		return ret;
+	kiocb->ki_flags |= IOCB_ALLOC_CACHE;
 
 	/*
 	 * If the file is marked O_NONBLOCK, still allow retry for it if it
@@ -686,7 +736,7 @@ static int io_rw_init_file(struct io_kiocb *req, fmode_t mode)
 			return -EOPNOTSUPP;
 
 		kiocb->private = NULL;
-		kiocb->ki_flags |= IOCB_HIPRI | IOCB_ALLOC_CACHE;
+		kiocb->ki_flags |= IOCB_HIPRI;
 		kiocb->ki_complete = io_complete_rw_iopoll;
 		req->iopoll_completed = 0;
 	} else {
@@ -698,7 +748,7 @@ static int io_rw_init_file(struct io_kiocb *req, fmode_t mode)
 	return 0;
 }
 
-int io_read(struct io_kiocb *req, unsigned int issue_flags)
+static int __io_read(struct io_kiocb *req, unsigned int issue_flags)
 {
 	struct io_rw *rw = io_kiocb_to_cmd(req, struct io_rw);
 	struct io_rw_state __s, *s = &__s;
@@ -710,7 +760,7 @@ int io_read(struct io_kiocb *req, unsigned int issue_flags)
 	loff_t *ppos;
 
 	if (!req_has_async_data(req)) {
-		ret = io_import_iovec(READ, req, &iovec, s, issue_flags);
+		ret = io_import_iovec(ITER_DEST, req, &iovec, s, issue_flags);
 		if (unlikely(ret < 0))
 			return ret;
 	} else {
@@ -722,7 +772,7 @@ int io_read(struct io_kiocb *req, unsigned int issue_flags)
 		 * buffers, as we dropped the selected one before retry.
 		 */
 		if (io_do_buffer_select(req)) {
-			ret = io_import_iovec(READ, req, &iovec, s, issue_flags);
+			ret = io_import_iovec(ITER_DEST, req, &iovec, s, issue_flags);
 			if (unlikely(ret < 0))
 				return ret;
 		}
@@ -766,8 +816,11 @@ int io_read(struct io_kiocb *req, unsigned int issue_flags)
 
 	if (ret == -EAGAIN || (req->flags & REQ_F_REISSUE)) {
 		req->flags &= ~REQ_F_REISSUE;
-		/* if we can poll, just do that */
-		if (req->opcode == IORING_OP_READ && file_can_poll(req->file))
+		/*
+		 * If we can poll, just do that. For a vectored read, we'll
+		 * need to copy state first.
+		 */
+		if (file_can_poll(req->file) && !io_issue_defs[req->opcode].vectored)
 			return -EAGAIN;
 		/* IOPOLL retry should happen for io-wq threads */
 		if (!force_nonblock && !(req->ctx->flags & IORING_SETUP_IOPOLL))
@@ -794,10 +847,12 @@ int io_read(struct io_kiocb *req, unsigned int issue_flags)
 	iov_iter_restore(&s->iter, &s->iter_state);
 
 	ret2 = io_setup_async_rw(req, iovec, s, true);
-	if (ret2)
-		return ret2;
-
 	iovec = NULL;
+	if (ret2) {
+		ret = ret > 0 ? ret : ret2;
+		goto done;
+	}
+
 	io = req->async_data;
 	s = &io->s;
 	/*
@@ -823,6 +878,7 @@ int io_read(struct io_kiocb *req, unsigned int issue_flags)
 			return -EAGAIN;
 		}
 
+		req->cqe.res = iov_iter_count(&s->iter);
 		/*
 		 * Now retry read with the IOCB_WAITQ parts set in the iocb. If
 		 * we get -EIOCBQUEUED, then we'll get a notification when the
@@ -840,7 +896,76 @@ done:
 	/* it's faster to check here then delegate to kfree */
 	if (iovec)
 		kfree(iovec);
-	return kiocb_done(req, ret, issue_flags);
+	return ret;
+}
+
+int io_read(struct io_kiocb *req, unsigned int issue_flags)
+{
+	int ret;
+
+	ret = __io_read(req, issue_flags);
+	if (ret >= 0)
+		return kiocb_done(req, ret, issue_flags);
+
+	return ret;
+}
+
+int io_read_mshot(struct io_kiocb *req, unsigned int issue_flags)
+{
+	struct io_rw *rw = io_kiocb_to_cmd(req, struct io_rw);
+	unsigned int cflags = 0;
+	int ret;
+
+	/*
+	 * Multishot MUST be used on a pollable file
+	 */
+	if (!file_can_poll(req->file))
+		return -EBADFD;
+
+	ret = __io_read(req, issue_flags);
+
+	/*
+	 * If we get -EAGAIN, recycle our buffer and just let normal poll
+	 * handling arm it.
+	 */
+	if (ret == -EAGAIN) {
+		/*
+		 * Reset rw->len to 0 again to avoid clamping future mshot
+		 * reads, in case the buffer size varies.
+		 */
+		if (io_kbuf_recycle(req, issue_flags))
+			rw->len = 0;
+		return -EAGAIN;
+	}
+
+	/*
+	 * Any successful return value will keep the multishot read armed.
+	 */
+	if (ret > 0) {
+		/*
+		 * Put our buffer and post a CQE. If we fail to post a CQE, then
+		 * jump to the termination path. This request is then done.
+		 */
+		cflags = io_put_kbuf(req, issue_flags);
+		rw->len = 0; /* similarly to above, reset len to 0 */
+
+		if (io_fill_cqe_req_aux(req,
+					issue_flags & IO_URING_F_COMPLETE_DEFER,
+					ret, cflags | IORING_CQE_F_MORE)) {
+			if (issue_flags & IO_URING_F_MULTISHOT)
+				return IOU_ISSUE_SKIP_COMPLETE;
+			return -EAGAIN;
+		}
+	}
+
+	/*
+	 * Either an error, or we've hit overflow posting the CQE. For any
+	 * multishot request, hitting overflow will terminate it.
+	 */
+	io_req_set_res(req, ret, cflags);
+	if (issue_flags & IO_URING_F_MULTISHOT)
+		return IOU_STOP_MULTISHOT;
+	return IOU_OK;
 }
 
 int io_write(struct io_kiocb *req, unsigned int issue_flags)
@@ -854,7 +979,7 @@ int io_write(struct io_kiocb *req, unsigned int issue_flags)
 	loff_t *ppos;
 
 	if (!req_has_async_data(req)) {
-		ret = io_import_iovec(WRITE, req, &iovec, s, issue_flags);
+		ret = io_import_iovec(ITER_SOURCE, req, &iovec, s, issue_flags);
 		if (unlikely(ret < 0))
 			return ret;
 	} else {
@@ -896,18 +1021,8 @@ int io_write(struct io_kiocb *req, unsigned int issue_flags)
 		return ret;
 	}
 
-	/*
-	 * Open-code file_start_write here to grab freeze protection,
-	 * which will be released by another thread in
-	 * io_complete_rw().  Fool lockdep by telling it the lock got
-	 * released so that it doesn't complain about the held lock when
-	 * we return to userspace.
-	 */
-	if (req->flags & REQ_F_ISREG) {
-		sb_start_write(file_inode(req->file)->i_sb);
-		__sb_writers_release(file_inode(req->file)->i_sb,
-					SB_FREEZE_WRITE);
-	}
+	if (req->flags & REQ_F_ISREG)
+		kiocb_start_write(kiocb);
 	kiocb->ki_flags |= IOCB_WRITE;
 
 	if (likely(req->file->f_op->write_iter))
@@ -937,7 +1052,7 @@ int io_write(struct io_kiocb *req, unsigned int issue_flags)
 			goto copy_iov;
 
 		if (ret2 != req->cqe.res && ret2 >= 0 && need_complete_io(req)) {
-			struct io_async_rw *rw;
+			struct io_async_rw *io;
 
 			trace_io_uring_short_write(req->ctx, kiocb->ki_pos - ret2,
 						req->cqe.res, ret2);
@@ -950,12 +1065,12 @@ int io_write(struct io_kiocb *req, unsigned int issue_flags)
 			iov_iter_save_state(&s->iter, &s->iter_state);
 			ret = io_setup_async_rw(req, iovec, s, true);
 
-			rw = req->async_data;
-			if (rw)
-				rw->bytes_done += ret2;
+			io = req->async_data;
+			if (io)
+				io->bytes_done += ret2;
 
 			if (kiocb->ki_flags & IOCB_WRITE)
-				kiocb_end_write(req);
+				io_req_end_write(req);
 			return ret ? ret : -EAGAIN;
 		}
 done:
@@ -966,7 +1081,7 @@ copy_iov:
 		ret = io_setup_async_rw(req, iovec, s, false);
 		if (!ret) {
 			if (kiocb->ki_flags & IOCB_WRITE)
-				kiocb_end_write(req);
+				io_req_end_write(req);
 			return -EAGAIN;
 		}
 		return ret;
@@ -977,17 +1092,18 @@ copy_iov:
 	return ret;
 }
 
-static void io_cqring_ev_posted_iopoll(struct io_ring_ctx *ctx)
+void io_rw_fail(struct io_kiocb *req)
 {
-	io_commit_cqring_flush(ctx);
-	if (ctx->flags & IORING_SETUP_SQPOLL)
-		io_cqring_wake(ctx);
+	int res;
+
+	res = io_fixup_rw_res(req, req->cqe.res);
+	io_req_set_res(req, res, req->cqe.flags);
 }
 
 int io_do_iopoll(struct io_ring_ctx *ctx, bool force_nonspin)
 {
 	struct io_wq_work_node *pos, *start, *prev;
-	unsigned int poll_flags = BLK_POLL_NOSLEEP;
+	unsigned int poll_flags = 0;
 	DEFINE_IO_COMP_BATCH(iob);
 	int nr_events = 0;
 
@@ -1000,7 +1116,7 @@ int io_do_iopoll(struct io_ring_ctx *ctx, bool force_nonspin)
 
 	wq_list_for_each(pos, start, &ctx->iopoll_list) {
 		struct io_kiocb *req = container_of(pos, struct io_kiocb, comp_list);
-		struct io_rw *rw = io_kiocb_to_cmd(req, struct io_rw);
+		struct file *file = req->file;
 		int ret;
 
 		/*
@@ -1011,7 +1127,17 @@ int io_do_iopoll(struct io_ring_ctx *ctx, bool force_nonspin)
 		if (READ_ONCE(req->iopoll_completed))
 			break;
 
-		ret = rw->kiocb.ki_filp->f_op->iopoll(&rw->kiocb, &iob, poll_flags);
+		if (req->opcode == IORING_OP_URING_CMD) {
+			struct io_uring_cmd *ioucmd;
+
+			ioucmd = io_kiocb_to_cmd(req, struct io_uring_cmd);
+			ret = file->f_op->uring_cmd_iopoll(ioucmd, &iob,
+								poll_flags);
+		} else {
+			struct io_rw *rw = io_kiocb_to_cmd(req, struct io_rw);
+
+			ret = file->f_op->iopoll(&rw->kiocb, &iob, poll_flags);
+		}
 		if (unlikely(ret < 0))
 			return ret;
 		else if (ret)
@@ -1036,20 +1162,17 @@ int io_do_iopoll(struct io_ring_ctx *ctx, bool force_nonspin)
 		if (!smp_load_acquire(&req->iopoll_completed))
 			break;
 		nr_events++;
-		if (unlikely(req->flags & REQ_F_CQE_SKIP))
-			continue;
-
 		req->cqe.flags = io_put_kbuf(req, 0);
-		__io_fill_cqe_req(req->ctx, req);
 	}
-
 	if (unlikely(!nr_events))
 		return 0;
 
-	io_commit_cqring(ctx);
-	io_cqring_ev_posted_iopoll(ctx);
 	pos = start ? start->next : ctx->iopoll_list.first;
 	wq_list_cut(&ctx->iopoll_list, prev, start);
-	io_free_batch_list(ctx, pos);
+
+	if (WARN_ON_ONCE(!wq_list_empty(&ctx->submit_state.compl_reqs)))
+		return 0;
+	ctx->submit_state.compl_reqs.first = pos;
+	__io_submit_flush_completions(ctx);
 	return nr_events;
 }

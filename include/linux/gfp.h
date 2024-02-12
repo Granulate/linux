@@ -8,6 +8,7 @@
 #include <linux/topology.h>
 
 struct vm_area_struct;
+struct mempolicy;
 
 /* Convert GFP flags to their corresponding migrate type */
 #define GFP_MOVABLE_MASK (__GFP_RECLAIMABLE|__GFP_MOVABLE)
@@ -18,6 +19,9 @@ static inline int gfp_migratetype(const gfp_t gfp_flags)
 	VM_WARN_ON((gfp_flags & GFP_MOVABLE_MASK) == GFP_MOVABLE_MASK);
 	BUILD_BUG_ON((1UL << GFP_MOVABLE_SHIFT) != ___GFP_MOVABLE);
 	BUILD_BUG_ON((___GFP_MOVABLE >> GFP_MOVABLE_SHIFT) != MIGRATE_MOVABLE);
+	BUILD_BUG_ON((___GFP_RECLAIMABLE >> GFP_MOVABLE_SHIFT) != MIGRATE_RECLAIMABLE);
+	BUILD_BUG_ON(((___GFP_MOVABLE | ___GFP_RECLAIMABLE) >>
+		      GFP_MOVABLE_SHIFT) != MIGRATE_HIGHATOMIC);
 
 	if (unlikely(page_group_by_mobility_disabled))
 		return MIGRATE_UNMOVABLE;
@@ -31,29 +35,6 @@ static inline int gfp_migratetype(const gfp_t gfp_flags)
 static inline bool gfpflags_allow_blocking(const gfp_t gfp_flags)
 {
 	return !!(gfp_flags & __GFP_DIRECT_RECLAIM);
-}
-
-/**
- * gfpflags_normal_context - is gfp_flags a normal sleepable context?
- * @gfp_flags: gfp_flags to test
- *
- * Test whether @gfp_flags indicates that the allocation is from the
- * %current context and allowed to sleep.
- *
- * An allocation being allowed to block doesn't mean it owns the %current
- * context.  When direct reclaim path tries to allocate memory, the
- * allocation context is nested inside whatever %current was doing at the
- * time of the original allocation.  The nested allocation may be allowed
- * to block but modifying anything %current owns can corrupt the outer
- * context's expectations.
- *
- * %true result from this function indicates that the allocation context
- * can sleep and use anything that's associated with %current.
- */
-static inline bool gfpflags_normal_context(const gfp_t gfp_flags)
-{
-	return (gfp_flags & (__GFP_DIRECT_RECLAIM | __GFP_MEMALLOC)) ==
-		__GFP_DIRECT_RECLAIM;
 }
 
 #ifdef CONFIG_HIGHMEM
@@ -230,6 +211,20 @@ alloc_pages_bulk_array_node(gfp_t gfp, int nid, unsigned long nr_pages, struct p
 	return __alloc_pages_bulk(gfp, nid, NULL, nr_pages, NULL, page_array);
 }
 
+static inline void warn_if_node_offline(int this_node, gfp_t gfp_mask)
+{
+	gfp_t warn_gfp = gfp_mask & (__GFP_THISNODE|__GFP_NOWARN);
+
+	if (warn_gfp != (__GFP_THISNODE|__GFP_NOWARN))
+		return;
+
+	if (node_online(this_node))
+		return;
+
+	pr_warn("%pGg allocation from offline node %d\n", &gfp_mask, this_node);
+	dump_stack();
+}
+
 /*
  * Allocate pages, preferring the node given as nid. The node must be valid and
  * online. For more general interface, see alloc_pages_node().
@@ -238,7 +233,7 @@ static inline struct page *
 __alloc_pages_node(int nid, gfp_t gfp_mask, unsigned int order)
 {
 	VM_BUG_ON(nid < 0 || nid >= MAX_NUMNODES);
-	VM_WARN_ON((gfp_mask & __GFP_THISNODE) && !node_online(nid));
+	warn_if_node_offline(nid, gfp_mask);
 
 	return __alloc_pages(gfp_mask, order, nid, NULL);
 }
@@ -247,7 +242,7 @@ static inline
 struct folio *__folio_alloc_node(gfp_t gfp, unsigned int order, int nid)
 {
 	VM_BUG_ON(nid < 0 || nid >= MAX_NUMNODES);
-	VM_WARN_ON((gfp & __GFP_THISNODE) && !node_online(nid));
+	warn_if_node_offline(nid, gfp);
 
 	return __folio_alloc(gfp, order, nid, NULL);
 }
@@ -268,13 +263,20 @@ static inline struct page *alloc_pages_node(int nid, gfp_t gfp_mask,
 
 #ifdef CONFIG_NUMA
 struct page *alloc_pages(gfp_t gfp, unsigned int order);
-struct folio *folio_alloc(gfp_t gfp, unsigned order);
+struct page *alloc_pages_mpol(gfp_t gfp, unsigned int order,
+		struct mempolicy *mpol, pgoff_t ilx, int nid);
+struct folio *folio_alloc(gfp_t gfp, unsigned int order);
 struct folio *vma_alloc_folio(gfp_t gfp, int order, struct vm_area_struct *vma,
 		unsigned long addr, bool hugepage);
 #else
 static inline struct page *alloc_pages(gfp_t gfp_mask, unsigned int order)
 {
 	return alloc_pages_node(numa_node_id(), gfp_mask, order);
+}
+static inline struct page *alloc_pages_mpol(gfp_t gfp, unsigned int order,
+		struct mempolicy *mpol, pgoff_t ilx, int nid)
+{
+	return alloc_pages(gfp, order);
 }
 static inline struct folio *folio_alloc(gfp_t gfp, unsigned int order)
 {
@@ -325,12 +327,14 @@ extern void page_frag_free(void *addr);
 #define __free_page(page) __free_pages((page), 0)
 #define free_page(addr) free_pages((addr), 0)
 
-void page_alloc_init(void);
+void page_alloc_init_cpuhp(void);
+int decay_pcp_high(struct zone *zone, struct per_cpu_pages *pcp);
 void drain_zone_pages(struct zone *zone, struct per_cpu_pages *pcp);
 void drain_all_pages(struct zone *zone);
 void drain_local_pages(struct zone *zone);
 
 void page_alloc_init_late(void);
+void setup_pcp_cacheinfo(void);
 
 /*
  * gfp_allowed_mask is set to GFP_BOOT_MASK during early boot to restrict what
@@ -344,19 +348,12 @@ extern gfp_t gfp_allowed_mask;
 /* Returns true if the gfp_mask allows use of ALLOC_NO_WATERMARK */
 bool gfp_pfmemalloc_allowed(gfp_t gfp_mask);
 
-extern void pm_restrict_gfp_mask(void);
-extern void pm_restore_gfp_mask(void);
+static inline bool gfp_has_io_fs(gfp_t gfp)
+{
+	return (gfp & (__GFP_IO | __GFP_FS)) == (__GFP_IO | __GFP_FS);
+}
 
 extern gfp_t vma_thp_gfp_mask(struct vm_area_struct *vma);
-
-#ifdef CONFIG_PM_SLEEP
-extern bool pm_suspended_storage(void);
-#else
-static inline bool pm_suspended_storage(void)
-{
-	return false;
-}
-#endif /* CONFIG_PM_SLEEP */
 
 #ifdef CONFIG_CONTIG_ALLOC
 /* The below functions must be run on a range from a single zone. */
@@ -366,10 +363,5 @@ extern struct page *alloc_contig_pages(unsigned long nr_pages, gfp_t gfp_mask,
 				       int nid, nodemask_t *nodemask);
 #endif
 void free_contig_range(unsigned long pfn, unsigned long nr_pages);
-
-#ifdef CONFIG_CMA
-/* CMA stuff */
-extern void init_cma_reserved_pageblock(struct page *page);
-#endif
 
 #endif /* __LINUX_GFP_H */

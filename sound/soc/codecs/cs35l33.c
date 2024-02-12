@@ -30,8 +30,6 @@
 #include <linux/regulator/machine.h>
 #include <linux/of_gpio.h>
 #include <linux/of.h>
-#include <linux/of_device.h>
-#include <linux/of_irq.h>
 
 #include "cs35l33.h"
 #include "cirrus_legacy.h"
@@ -852,7 +850,7 @@ static const struct regmap_config cs35l33_regmap = {
 	.volatile_reg = cs35l33_volatile_register,
 	.readable_reg = cs35l33_readable_register,
 	.writeable_reg = cs35l33_writeable_register,
-	.cache_type = REGCACHE_RBTREE,
+	.cache_type = REGCACHE_MAPLE,
 	.use_single_read = true,
 	.use_single_write = true,
 };
@@ -1250,7 +1248,7 @@ err_enable:
 	return ret;
 }
 
-static int cs35l33_i2c_remove(struct i2c_client *client)
+static void cs35l33_i2c_remove(struct i2c_client *client)
 {
 	struct cs35l33_private *cs35l33 = i2c_get_clientdata(client);
 
@@ -1259,8 +1257,6 @@ static int cs35l33_i2c_remove(struct i2c_client *client)
 	pm_runtime_disable(&client->dev);
 	regulator_bulk_disable(cs35l33->num_core_supplies,
 		cs35l33->core_supplies);
-
-	return 0;
 }
 
 static const struct of_device_id cs35l33_of_match[] = {
@@ -1284,7 +1280,7 @@ static struct i2c_driver cs35l33_i2c_driver = {
 
 		},
 	.id_table = cs35l33_id,
-	.probe_new = cs35l33_i2c_probe,
+	.probe = cs35l33_i2c_probe,
 	.remove = cs35l33_i2c_remove,
 
 };

@@ -77,11 +77,6 @@ struct drm_plane_helper_funcs;
  * intended to indicate whether a full modeset is needed, rather than strictly
  * describing what has changed in a commit. See also:
  * drm_atomic_crtc_needs_modeset()
- *
- * WARNING: Transitional helpers (like drm_helper_crtc_mode_set() or
- * drm_helper_crtc_mode_set_base()) do not maintain many of the derived control
- * state like @plane_mask so drivers not converted over to atomic helpers should
- * not rely on these being accurate!
  */
 struct drm_crtc_state {
 	/** @crtc: backpointer to the CRTC */
@@ -1216,6 +1211,15 @@ int drm_crtc_init_with_planes(struct drm_device *dev,
 			      struct drm_plane *cursor,
 			      const struct drm_crtc_funcs *funcs,
 			      const char *name, ...);
+
+__printf(6, 7)
+int drmm_crtc_init_with_planes(struct drm_device *dev,
+			       struct drm_crtc *crtc,
+			       struct drm_plane *primary,
+			       struct drm_plane *cursor,
+			       const struct drm_crtc_funcs *funcs,
+			       const char *name, ...);
+
 void drm_crtc_cleanup(struct drm_crtc *crtc);
 
 __printf(7, 8)

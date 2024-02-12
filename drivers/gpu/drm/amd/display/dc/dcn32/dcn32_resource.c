@@ -47,7 +47,7 @@
 #include "dcn32/dcn32_optc.h"
 #include "dcn20/dcn20_hwseq.h"
 #include "dcn30/dcn30_hwseq.h"
-#include "dce110/dce110_hw_sequencer.h"
+#include "dce110/dce110_hwseq.h"
 #include "dcn30/dcn30_opp.h"
 #include "dcn20/dcn20_dsc.h"
 #include "dcn30/dcn30_vpg.h"
@@ -57,7 +57,6 @@
 #include "dcn31/dcn31_hpo_dp_stream_encoder.h"
 #include "dcn31/dcn31_hpo_dp_link_encoder.h"
 #include "dcn32/dcn32_hpo_dp_link_encoder.h"
-#include "dc_link_dp.h"
 #include "dcn31/dcn31_apg.h"
 #include "dcn31/dcn31_dio_link_encoder.h"
 #include "dcn32/dcn32_dio_link_encoder.h"
@@ -69,7 +68,7 @@
 #include "dml/display_mode_vba.h"
 #include "dcn32/dcn32_dccg.h"
 #include "dcn10/dcn10_resource.h"
-#include "dc_link_ddc.h"
+#include "link.h"
 #include "dcn31/dcn31_panel_cntl.h"
 
 #include "dcn30/dcn30_dwb.h"
@@ -90,28 +89,7 @@
 #include "dcn20/dcn20_vmid.h"
 #include "dml/dcn32/dcn32_fpu.h"
 
-#define DCN_BASE__INST0_SEG1                       0x000000C0
-#define DCN_BASE__INST0_SEG2                       0x000034C0
-#define DCN_BASE__INST0_SEG3                       0x00009000
-#define NBIO_BASE__INST0_SEG1                      0x00000014
-
-#define MAX_INSTANCE                                        6
-#define MAX_SEGMENT                                         6
-
-struct IP_BASE_INSTANCE {
-	unsigned int segment[MAX_SEGMENT];
-};
-
-struct IP_BASE {
-	struct IP_BASE_INSTANCE instance[MAX_INSTANCE];
-};
-
-static const struct IP_BASE DCN_BASE = { { { { 0x00000012, 0x000000C0, 0x000034C0, 0x00009000, 0x02403C00, 0 } },
-					{ { 0, 0, 0, 0, 0, 0 } },
-					{ { 0, 0, 0, 0, 0, 0 } },
-					{ { 0, 0, 0, 0, 0, 0 } },
-					{ { 0, 0, 0, 0, 0, 0 } },
-					{ { 0, 0, 0, 0, 0, 0 } } } };
+#include "dml2/dml2_wrapper.h"
 
 #define DC_LOGGER_INIT(logger)
 
@@ -129,81 +107,106 @@ enum dcn32_clk_src_array_id {
  */
 
 /* DCN */
-/* TODO awful hack. fixup dcn20_dwb.h */
-#undef BASE_INNER
-#define BASE_INNER(seg) DCN_BASE__INST0_SEG ## seg
+#define BASE_INNER(seg) ctx->dcn_reg_offsets[seg]
 
 #define BASE(seg) BASE_INNER(seg)
 
 #define SR(reg_name)\
-		.reg_name = BASE(reg ## reg_name ## _BASE_IDX) +  \
+		REG_STRUCT.reg_name = BASE(reg ## reg_name ## _BASE_IDX) +  \
 					reg ## reg_name
+#define SR_ARR(reg_name, id) \
+	REG_STRUCT[id].reg_name = BASE(reg##reg_name##_BASE_IDX) + reg##reg_name
+
+#define SR_ARR_INIT(reg_name, id, value) \
+	REG_STRUCT[id].reg_name = value
 
 #define SRI(reg_name, block, id)\
-	.reg_name = BASE(reg ## block ## id ## _ ## reg_name ## _BASE_IDX) + \
-					reg ## block ## id ## _ ## reg_name
+	REG_STRUCT.reg_name = BASE(reg ## block ## id ## _ ## reg_name ## _BASE_IDX) + \
+		reg ## block ## id ## _ ## reg_name
+
+#define SRI_ARR(reg_name, block, id)\
+	REG_STRUCT[id].reg_name = BASE(reg ## block ## id ## _ ## reg_name ## _BASE_IDX) + \
+		reg ## block ## id ## _ ## reg_name
+
+#define SR_ARR_I2C(reg_name, id) \
+	REG_STRUCT[id-1].reg_name = BASE(reg##reg_name##_BASE_IDX) + reg##reg_name
+
+#define SRI_ARR_I2C(reg_name, block, id)\
+	REG_STRUCT[id-1].reg_name = BASE(reg ## block ## id ## _ ## reg_name ## _BASE_IDX) + \
+		reg ## block ## id ## _ ## reg_name
+
+#define SRI_ARR_ALPHABET(reg_name, block, index, id)\
+	REG_STRUCT[index].reg_name = BASE(reg ## block ## id ## _ ## reg_name ## _BASE_IDX) + \
+		reg ## block ## id ## _ ## reg_name
 
 #define SRI2(reg_name, block, id)\
-	.reg_name = BASE(reg ## reg_name ## _BASE_IDX) + \
-					reg ## reg_name
+	.reg_name = BASE(reg ## reg_name ## _BASE_IDX) +	\
+		reg ## reg_name
+#define SRI2_ARR(reg_name, block, id)\
+	REG_STRUCT[id].reg_name = BASE(reg ## reg_name ## _BASE_IDX) +	\
+		reg ## reg_name
 
 #define SRIR(var_name, reg_name, block, id)\
 	.var_name = BASE(reg ## block ## id ## _ ## reg_name ## _BASE_IDX) + \
-					reg ## block ## id ## _ ## reg_name
+		reg ## block ## id ## _ ## reg_name
 
 #define SRII(reg_name, block, id)\
-	.reg_name[id] = BASE(reg ## block ## id ## _ ## reg_name ## _BASE_IDX) + \
+	REG_STRUCT.reg_name[id] = BASE(reg ## block ## id ## _ ## reg_name ## _BASE_IDX) + \
 					reg ## block ## id ## _ ## reg_name
+
+#define SRII_ARR_2(reg_name, block, id, inst)\
+	REG_STRUCT[inst].reg_name[id] = BASE(reg ## block ## id ## _ ## reg_name ## _BASE_IDX) + \
+		reg ## block ## id ## _ ## reg_name
 
 #define SRII_MPC_RMU(reg_name, block, id)\
 	.RMU##_##reg_name[id] = BASE(reg ## block ## id ## _ ## reg_name ## _BASE_IDX) + \
-					reg ## block ## id ## _ ## reg_name
+		reg ## block ## id ## _ ## reg_name
 
 #define SRII_DWB(reg_name, temp_name, block, id)\
-	.reg_name[id] = BASE(reg ## block ## id ## _ ## temp_name ## _BASE_IDX) + \
-					reg ## block ## id ## _ ## temp_name
+	REG_STRUCT.reg_name[id] = BASE(reg ## block ## id ## _ ## temp_name ## _BASE_IDX) + \
+		reg ## block ## id ## _ ## temp_name
+
+#define SF_DWB2(reg_name, block, id, field_name, post_fix)	\
+	.field_name = reg_name ## __ ## field_name ## post_fix
 
 #define DCCG_SRII(reg_name, block, id)\
-	.block ## _ ## reg_name[id] = BASE(reg ## block ## id ## _ ## reg_name ## _BASE_IDX) + \
-					reg ## block ## id ## _ ## reg_name
+	REG_STRUCT.block ## _ ## reg_name[id] = BASE(reg ## block ## id ## _ ## reg_name ## _BASE_IDX) + \
+		reg ## block ## id ## _ ## reg_name
 
 #define VUPDATE_SRII(reg_name, block, id)\
-	.reg_name[id] = BASE(reg ## reg_name ## _ ## block ## id ## _BASE_IDX) + \
-					reg ## reg_name ## _ ## block ## id
+	REG_STRUCT.reg_name[id] = BASE(reg ## reg_name ## _ ## block ## id ## _BASE_IDX) + \
+		reg ## reg_name ## _ ## block ## id
 
 /* NBIO */
-#define NBIO_BASE_INNER(seg) \
-	NBIO_BASE__INST0_SEG ## seg
+#define NBIO_BASE_INNER(seg) ctx->nbio_reg_offsets[seg]
 
 #define NBIO_BASE(seg) \
 	NBIO_BASE_INNER(seg)
 
 #define NBIO_SR(reg_name)\
-		.reg_name = NBIO_BASE(regBIF_BX0_ ## reg_name ## _BASE_IDX) + \
-					regBIF_BX0_ ## reg_name
+	REG_STRUCT.reg_name = NBIO_BASE(regBIF_BX0_ ## reg_name ## _BASE_IDX) + \
+			regBIF_BX0_ ## reg_name
+#define NBIO_SR_ARR(reg_name, id)\
+	REG_STRUCT[id].reg_name = NBIO_BASE(regBIF_BX0_ ## reg_name ## _BASE_IDX) + \
+		regBIF_BX0_ ## reg_name
 
 #undef CTX
 #define CTX ctx
 #define REG(reg_name) \
-	(DCN_BASE.instance[0].segment[reg ## reg_name ## _BASE_IDX] + reg ## reg_name)
+	(ctx->dcn_reg_offsets[reg ## reg_name ## _BASE_IDX] + reg ## reg_name)
 
-static const struct bios_registers bios_regs = {
-		NBIO_SR(BIOS_SCRATCH_3),
-		NBIO_SR(BIOS_SCRATCH_6)
-};
+static struct bios_registers bios_regs;
 
-#define clk_src_regs(index, pllid)\
-[index] = {\
-	CS_COMMON_REG_LIST_DCN3_0(index, pllid),\
-}
+#define bios_regs_init() \
+		( \
+		NBIO_SR(BIOS_SCRATCH_3),\
+		NBIO_SR(BIOS_SCRATCH_6)\
+		)
 
-static const struct dce110_clk_src_regs clk_src_regs[] = {
-	clk_src_regs(0, A),
-	clk_src_regs(1, B),
-	clk_src_regs(2, C),
-	clk_src_regs(3, D),
-	clk_src_regs(4, E)
-};
+#define clk_src_regs_init(index, pllid)\
+	CS_COMMON_REG_LIST_DCN3_0_RI(index, pllid)
+
+static struct dce110_clk_src_regs clk_src_regs[5];
 
 static const struct dce110_clk_src_shift cs_shift = {
 		CS_COMMON_MASK_SH_LIST_DCN3_2(__SHIFT)
@@ -213,17 +216,10 @@ static const struct dce110_clk_src_mask cs_mask = {
 		CS_COMMON_MASK_SH_LIST_DCN3_2(_MASK)
 };
 
-#define abm_regs(id)\
-[id] = {\
-		ABM_DCN32_REG_LIST(id)\
-}
+#define abm_regs_init(id)\
+		ABM_DCN32_REG_LIST_RI(id)
 
-static const struct dce_abm_registers abm_regs[] = {
-		abm_regs(0),
-		abm_regs(1),
-		abm_regs(2),
-		abm_regs(3),
-};
+static struct dce_abm_registers abm_regs[4];
 
 static const struct dce_abm_shift abm_shift = {
 		ABM_MASK_SH_LIST_DCN32(__SHIFT)
@@ -233,18 +229,10 @@ static const struct dce_abm_mask abm_mask = {
 		ABM_MASK_SH_LIST_DCN32(_MASK)
 };
 
-#define audio_regs(id)\
-[id] = {\
-		AUD_COMMON_REG_LIST(id)\
-}
+#define audio_regs_init(id)\
+		AUD_COMMON_REG_LIST_RI(id)
 
-static const struct dce_audio_registers audio_regs[] = {
-	audio_regs(0),
-	audio_regs(1),
-	audio_regs(2),
-	audio_regs(3),
-	audio_regs(4)
-};
+static struct dce_audio_registers audio_regs[5];
 
 #define DCE120_AUD_COMMON_MASK_SH_LIST(mask_sh)\
 		SF(AZF0ENDPOINT0_AZALIA_F0_CODEC_ENDPOINT_INDEX, AZALIA_ENDPOINT_REG_INDEX, mask_sh),\
@@ -259,23 +247,10 @@ static const struct dce_audio_mask audio_mask = {
 		DCE120_AUD_COMMON_MASK_SH_LIST(_MASK)
 };
 
-#define vpg_regs(id)\
-[id] = {\
-	VPG_DCN3_REG_LIST(id)\
-}
+#define vpg_regs_init(id)\
+	VPG_DCN3_REG_LIST_RI(id)
 
-static const struct dcn30_vpg_registers vpg_regs[] = {
-	vpg_regs(0),
-	vpg_regs(1),
-	vpg_regs(2),
-	vpg_regs(3),
-	vpg_regs(4),
-	vpg_regs(5),
-	vpg_regs(6),
-	vpg_regs(7),
-	vpg_regs(8),
-	vpg_regs(9),
-};
+static struct dcn30_vpg_registers vpg_regs[10];
 
 static const struct dcn30_vpg_shift vpg_shift = {
 	DCN3_VPG_MASK_SH_LIST(__SHIFT)
@@ -285,19 +260,10 @@ static const struct dcn30_vpg_mask vpg_mask = {
 	DCN3_VPG_MASK_SH_LIST(_MASK)
 };
 
-#define afmt_regs(id)\
-[id] = {\
-	AFMT_DCN3_REG_LIST(id)\
-}
+#define afmt_regs_init(id)\
+	AFMT_DCN3_REG_LIST_RI(id)
 
-static const struct dcn30_afmt_registers afmt_regs[] = {
-	afmt_regs(0),
-	afmt_regs(1),
-	afmt_regs(2),
-	afmt_regs(3),
-	afmt_regs(4),
-	afmt_regs(5)
-};
+static struct dcn30_afmt_registers afmt_regs[6];
 
 static const struct dcn30_afmt_shift afmt_shift = {
 	DCN3_AFMT_MASK_SH_LIST(__SHIFT)
@@ -307,17 +273,10 @@ static const struct dcn30_afmt_mask afmt_mask = {
 	DCN3_AFMT_MASK_SH_LIST(_MASK)
 };
 
-#define apg_regs(id)\
-[id] = {\
-	APG_DCN31_REG_LIST(id)\
-}
+#define apg_regs_init(id)\
+	APG_DCN31_REG_LIST_RI(id)
 
-static const struct dcn31_apg_registers apg_regs[] = {
-	apg_regs(0),
-	apg_regs(1),
-	apg_regs(2),
-	apg_regs(3)
-};
+static struct dcn31_apg_registers apg_regs[4];
 
 static const struct dcn31_apg_shift apg_shift = {
 	DCN31_APG_MASK_SH_LIST(__SHIFT)
@@ -327,18 +286,10 @@ static const struct dcn31_apg_mask apg_mask = {
 		DCN31_APG_MASK_SH_LIST(_MASK)
 };
 
-#define stream_enc_regs(id)\
-[id] = {\
-	SE_DCN32_REG_LIST(id)\
-}
+#define stream_enc_regs_init(id)\
+	SE_DCN32_REG_LIST_RI(id)
 
-static const struct dcn10_stream_enc_registers stream_enc_regs[] = {
-	stream_enc_regs(0),
-	stream_enc_regs(1),
-	stream_enc_regs(2),
-	stream_enc_regs(3),
-	stream_enc_regs(4)
-};
+static struct dcn10_stream_enc_registers stream_enc_regs[5];
 
 static const struct dcn10_stream_encoder_shift se_shift = {
 		SE_COMMON_MASK_SH_LIST_DCN32(__SHIFT)
@@ -349,46 +300,24 @@ static const struct dcn10_stream_encoder_mask se_mask = {
 };
 
 
-#define aux_regs(id)\
-[id] = {\
-	DCN2_AUX_REG_LIST(id)\
-}
+#define aux_regs_init(id)\
+	DCN2_AUX_REG_LIST_RI(id)
 
-static const struct dcn10_link_enc_aux_registers link_enc_aux_regs[] = {
-		aux_regs(0),
-		aux_regs(1),
-		aux_regs(2),
-		aux_regs(3),
-		aux_regs(4)
-};
+static struct dcn10_link_enc_aux_registers link_enc_aux_regs[5];
 
-#define hpd_regs(id)\
-[id] = {\
-	HPD_REG_LIST(id)\
-}
+#define hpd_regs_init(id)\
+	HPD_REG_LIST_RI(id)
 
-static const struct dcn10_link_enc_hpd_registers link_enc_hpd_regs[] = {
-		hpd_regs(0),
-		hpd_regs(1),
-		hpd_regs(2),
-		hpd_regs(3),
-		hpd_regs(4)
-};
+static struct dcn10_link_enc_hpd_registers link_enc_hpd_regs[5];
 
-#define link_regs(id, phyid)\
-[id] = {\
-	LE_DCN31_REG_LIST(id), \
-	UNIPHY_DCN2_REG_LIST(phyid), \
+#define link_regs_init(id, phyid)\
+	( \
+	LE_DCN31_REG_LIST_RI(id), \
+	UNIPHY_DCN2_REG_LIST_RI(id, phyid)\
+	)
 	/*DPCS_DCN31_REG_LIST(id),*/ \
-}
 
-static const struct dcn10_link_enc_registers link_enc_regs[] = {
-	link_regs(0, A),
-	link_regs(1, B),
-	link_regs(2, C),
-	link_regs(3, D),
-	link_regs(4, E)
-};
+static struct dcn10_link_enc_registers link_enc_regs[5];
 
 static const struct dcn10_link_enc_shift le_shift = {
 	LINK_ENCODER_MASK_SH_LIST_DCN31(__SHIFT), \
@@ -397,21 +326,13 @@ static const struct dcn10_link_enc_shift le_shift = {
 
 static const struct dcn10_link_enc_mask le_mask = {
 	LINK_ENCODER_MASK_SH_LIST_DCN31(_MASK), \
-
 	//DPCS_DCN31_MASK_SH_LIST(_MASK)
 };
 
-#define hpo_dp_stream_encoder_reg_list(id)\
-[id] = {\
-	DCN3_1_HPO_DP_STREAM_ENC_REG_LIST(id)\
-}
+#define hpo_dp_stream_encoder_reg_init(id)\
+	DCN3_1_HPO_DP_STREAM_ENC_REG_LIST_RI(id)
 
-static const struct dcn31_hpo_dp_stream_encoder_registers hpo_dp_stream_enc_regs[] = {
-	hpo_dp_stream_encoder_reg_list(0),
-	hpo_dp_stream_encoder_reg_list(1),
-	hpo_dp_stream_encoder_reg_list(2),
-	hpo_dp_stream_encoder_reg_list(3),
-};
+static struct dcn31_hpo_dp_stream_encoder_registers hpo_dp_stream_enc_regs[4];
 
 static const struct dcn31_hpo_dp_stream_encoder_shift hpo_dp_se_shift = {
 	DCN3_1_HPO_DP_STREAM_ENC_MASK_SH_LIST(__SHIFT)
@@ -422,20 +343,14 @@ static const struct dcn31_hpo_dp_stream_encoder_mask hpo_dp_se_mask = {
 };
 
 
-#define hpo_dp_link_encoder_reg_list(id)\
-[id] = {\
-	DCN3_1_HPO_DP_LINK_ENC_REG_LIST(id),\
-	/*DCN3_1_RDPCSTX_REG_LIST(0),*/\
-	/*DCN3_1_RDPCSTX_REG_LIST(1),*/\
-	/*DCN3_1_RDPCSTX_REG_LIST(2),*/\
-	/*DCN3_1_RDPCSTX_REG_LIST(3),*/\
-	/*DCN3_1_RDPCSTX_REG_LIST(4)*/\
-}
+#define hpo_dp_link_encoder_reg_init(id)\
+	DCN3_1_HPO_DP_LINK_ENC_REG_LIST_RI(id)
+	/*DCN3_1_RDPCSTX_REG_LIST(0),*/
+	/*DCN3_1_RDPCSTX_REG_LIST(1),*/
+	/*DCN3_1_RDPCSTX_REG_LIST(2),*/
+	/*DCN3_1_RDPCSTX_REG_LIST(3),*/
 
-static const struct dcn31_hpo_dp_link_encoder_registers hpo_dp_link_enc_regs[] = {
-	hpo_dp_link_encoder_reg_list(0),
-	hpo_dp_link_encoder_reg_list(1),
-};
+static struct dcn31_hpo_dp_link_encoder_registers hpo_dp_link_enc_regs[2];
 
 static const struct dcn31_hpo_dp_link_encoder_shift hpo_dp_le_shift = {
 	DCN3_2_HPO_DP_LINK_ENC_MASK_SH_LIST(__SHIFT)
@@ -445,17 +360,10 @@ static const struct dcn31_hpo_dp_link_encoder_mask hpo_dp_le_mask = {
 	DCN3_2_HPO_DP_LINK_ENC_MASK_SH_LIST(_MASK)
 };
 
-#define dpp_regs(id)\
-[id] = {\
-	DPP_REG_LIST_DCN30_COMMON(id),\
-}
+#define dpp_regs_init(id)\
+	DPP_REG_LIST_DCN30_COMMON_RI(id)
 
-static const struct dcn3_dpp_registers dpp_regs[] = {
-	dpp_regs(0),
-	dpp_regs(1),
-	dpp_regs(2),
-	dpp_regs(3)
-};
+static struct dcn3_dpp_registers dpp_regs[4];
 
 static const struct dcn3_dpp_shift tf_shift = {
 		DPP_REG_LIST_SH_MASK_DCN30_COMMON(__SHIFT)
@@ -466,17 +374,10 @@ static const struct dcn3_dpp_mask tf_mask = {
 };
 
 
-#define opp_regs(id)\
-[id] = {\
-	OPP_REG_LIST_DCN30(id),\
-}
+#define opp_regs_init(id)\
+	OPP_REG_LIST_DCN30_RI(id)
 
-static const struct dcn20_opp_registers opp_regs[] = {
-	opp_regs(0),
-	opp_regs(1),
-	opp_regs(2),
-	opp_regs(3)
-};
+static struct dcn20_opp_registers opp_regs[4];
 
 static const struct dcn20_opp_shift opp_shift = {
 	OPP_MASK_SH_LIST_DCN20(__SHIFT)
@@ -486,21 +387,16 @@ static const struct dcn20_opp_mask opp_mask = {
 	OPP_MASK_SH_LIST_DCN20(_MASK)
 };
 
-#define aux_engine_regs(id)\
-[id] = {\
-	AUX_COMMON_REG_LIST0(id), \
-	.AUXN_IMPCAL = 0, \
-	.AUXP_IMPCAL = 0, \
-	.AUX_RESET_MASK = DP_AUX0_AUX_CONTROL__AUX_RESET_MASK, \
-}
+#define aux_engine_regs_init(id)\
+	( \
+	AUX_COMMON_REG_LIST0_RI(id), \
+	SR_ARR_INIT(AUXN_IMPCAL, id, 0), \
+	SR_ARR_INIT(AUXP_IMPCAL, id, 0), \
+	SR_ARR_INIT(AUX_RESET_MASK, id, DP_AUX0_AUX_CONTROL__AUX_RESET_MASK), \
+	SR_ARR_INIT(AUX_RESET_MASK, id, DP_AUX0_AUX_CONTROL__AUX_RESET_MASK)\
+	)
 
-static const struct dce110_aux_registers aux_engine_regs[] = {
-		aux_engine_regs(0),
-		aux_engine_regs(1),
-		aux_engine_regs(2),
-		aux_engine_regs(3),
-		aux_engine_regs(4)
-};
+static struct dce110_aux_registers aux_engine_regs[5];
 
 static const struct dce110_aux_registers_shift aux_shift = {
 	DCN_AUX_MASK_SH_LIST(__SHIFT)
@@ -510,15 +406,10 @@ static const struct dce110_aux_registers_mask aux_mask = {
 	DCN_AUX_MASK_SH_LIST(_MASK)
 };
 
+#define dwbc_regs_dcn3_init(id)\
+	DWBC_COMMON_REG_LIST_DCN30_RI(id)
 
-#define dwbc_regs_dcn3(id)\
-[id] = {\
-	DWBC_COMMON_REG_LIST_DCN30(id),\
-}
-
-static const struct dcn30_dwbc_registers dwbc30_regs[] = {
-	dwbc_regs_dcn3(0),
-};
+static struct dcn30_dwbc_registers dwbc30_regs[1];
 
 static const struct dcn30_dwbc_shift dwbc30_shift = {
 	DWBC_COMMON_MASK_SH_LIST_DCN30(__SHIFT)
@@ -528,14 +419,10 @@ static const struct dcn30_dwbc_mask dwbc30_mask = {
 	DWBC_COMMON_MASK_SH_LIST_DCN30(_MASK)
 };
 
-#define mcif_wb_regs_dcn3(id)\
-[id] = {\
-	MCIF_WB_COMMON_REG_LIST_DCN32(id),\
-}
+#define mcif_wb_regs_dcn3_init(id)\
+	MCIF_WB_COMMON_REG_LIST_DCN32_RI(id)
 
-static const struct dcn30_mmhubbub_registers mcif_wb30_regs[] = {
-	mcif_wb_regs_dcn3(0)
-};
+static struct dcn30_mmhubbub_registers mcif_wb30_regs[1];
 
 static const struct dcn30_mmhubbub_shift mcif_wb30_shift = {
 	MCIF_WB_COMMON_MASK_SH_LIST_DCN32(__SHIFT)
@@ -545,17 +432,10 @@ static const struct dcn30_mmhubbub_mask mcif_wb30_mask = {
 	MCIF_WB_COMMON_MASK_SH_LIST_DCN32(_MASK)
 };
 
-#define dsc_regsDCN20(id)\
-[id] = {\
-	DSC_REG_LIST_DCN20(id)\
-}
+#define dsc_regsDCN20_init(id)\
+	DSC_REG_LIST_DCN20_RI(id)
 
-static const struct dcn20_dsc_registers dsc_regs[] = {
-	dsc_regsDCN20(0),
-	dsc_regsDCN20(1),
-	dsc_regsDCN20(2),
-	dsc_regsDCN20(3)
-};
+static struct dcn20_dsc_registers dsc_regs[4];
 
 static const struct dcn20_dsc_shift dsc_shift = {
 	DSC_REG_LIST_SH_MASK_DCN20(__SHIFT)
@@ -565,17 +445,18 @@ static const struct dcn20_dsc_mask dsc_mask = {
 	DSC_REG_LIST_SH_MASK_DCN20(_MASK)
 };
 
-static const struct dcn30_mpc_registers mpc_regs = {
-		MPC_REG_LIST_DCN3_2(0),
-		MPC_REG_LIST_DCN3_2(1),
-		MPC_REG_LIST_DCN3_2(2),
-		MPC_REG_LIST_DCN3_2(3),
-		MPC_OUT_MUX_REG_LIST_DCN3_0(0),
-		MPC_OUT_MUX_REG_LIST_DCN3_0(1),
-		MPC_OUT_MUX_REG_LIST_DCN3_0(2),
-		MPC_OUT_MUX_REG_LIST_DCN3_0(3),
-		MPC_DWB_MUX_REG_LIST_DCN3_0(0),
-};
+static struct dcn30_mpc_registers mpc_regs;
+
+#define dcn_mpc_regs_init() \
+	MPC_REG_LIST_DCN3_2_RI(0),\
+	MPC_REG_LIST_DCN3_2_RI(1),\
+	MPC_REG_LIST_DCN3_2_RI(2),\
+	MPC_REG_LIST_DCN3_2_RI(3),\
+	MPC_OUT_MUX_REG_LIST_DCN3_0_RI(0),\
+	MPC_OUT_MUX_REG_LIST_DCN3_0_RI(1),\
+	MPC_OUT_MUX_REG_LIST_DCN3_0_RI(2),\
+	MPC_OUT_MUX_REG_LIST_DCN3_0_RI(3),\
+	MPC_DWB_MUX_REG_LIST_DCN3_0_RI(0)
 
 static const struct dcn30_mpc_shift mpc_shift = {
 	MPC_COMMON_MASK_SH_LIST_DCN32(__SHIFT)
@@ -585,19 +466,10 @@ static const struct dcn30_mpc_mask mpc_mask = {
 	MPC_COMMON_MASK_SH_LIST_DCN32(_MASK)
 };
 
-#define optc_regs(id)\
-[id] = {OPTC_COMMON_REG_LIST_DCN3_2(id)}
+#define optc_regs_init(id)\
+	OPTC_COMMON_REG_LIST_DCN3_2_RI(id)
 
-//#ifdef DIAGS_BUILD
-//static struct dcn_optc_registers optc_regs[] = {
-//#else
-static const struct dcn_optc_registers optc_regs[] = {
-//#endif
-	optc_regs(0),
-	optc_regs(1),
-	optc_regs(2),
-	optc_regs(3)
-};
+static struct dcn_optc_registers optc_regs[4];
 
 static const struct dcn_optc_shift optc_shift = {
 	OPTC_COMMON_MASK_SH_LIST_DCN3_2(__SHIFT)
@@ -607,17 +479,10 @@ static const struct dcn_optc_mask optc_mask = {
 	OPTC_COMMON_MASK_SH_LIST_DCN3_2(_MASK)
 };
 
-#define hubp_regs(id)\
-[id] = {\
-	HUBP_REG_LIST_DCN32(id)\
-}
+#define hubp_regs_init(id)\
+	HUBP_REG_LIST_DCN32_RI(id)
 
-static const struct dcn_hubp2_registers hubp_regs[] = {
-		hubp_regs(0),
-		hubp_regs(1),
-		hubp_regs(2),
-		hubp_regs(3)
-};
+static struct dcn_hubp2_registers hubp_regs[4];
 
 
 static const struct dcn_hubp2_shift hubp_shift = {
@@ -627,9 +492,10 @@ static const struct dcn_hubp2_shift hubp_shift = {
 static const struct dcn_hubp2_mask hubp_mask = {
 		HUBP_MASK_SH_LIST_DCN32(_MASK)
 };
-static const struct dcn_hubbub_registers hubbub_reg = {
-		HUBBUB_REG_LIST_DCN32(0)
-};
+
+static struct dcn_hubbub_registers hubbub_reg;
+#define hubbub_reg_init()\
+		HUBBUB_REG_LIST_DCN32_RI(0)
 
 static const struct dcn_hubbub_shift hubbub_shift = {
 		HUBBUB_MASK_SH_LIST_DCN32(__SHIFT)
@@ -639,9 +505,10 @@ static const struct dcn_hubbub_mask hubbub_mask = {
 		HUBBUB_MASK_SH_LIST_DCN32(_MASK)
 };
 
-static const struct dccg_registers dccg_regs = {
-		DCCG_REG_LIST_DCN32()
-};
+static struct dccg_registers dccg_regs;
+
+#define dccg_regs_init()\
+	DCCG_REG_LIST_DCN32_RI()
 
 static const struct dccg_shift dccg_shift = {
 		DCCG_MASK_SH_LIST_DCN32(__SHIFT)
@@ -714,9 +581,10 @@ static const struct dccg_mask dccg_mask = {
 	SR(AZALIA_AUDIO_DTO), \
 	SR(AZALIA_CONTROLLER_CLOCK_GATING)
 
-static const struct dce_hwseq_registers hwseq_reg = {
-		HWSEQ_DCN32_REG_LIST()
-};
+static struct dce_hwseq_registers hwseq_reg;
+
+#define hwseq_reg_init()\
+	HWSEQ_DCN32_REG_LIST()
 
 #define HWSEQ_DCN32_MASK_SH_LIST(mask_sh)\
 	HWSEQ_DCN_MASK_SH_LIST(mask_sh), \
@@ -759,29 +627,10 @@ static const struct dce_hwseq_shift hwseq_shift = {
 static const struct dce_hwseq_mask hwseq_mask = {
 		HWSEQ_DCN32_MASK_SH_LIST(_MASK)
 };
-#define vmid_regs(id)\
-[id] = {\
-		DCN20_VMID_REG_LIST(id)\
-}
+#define vmid_regs_init(id)\
+		DCN20_VMID_REG_LIST_RI(id)
 
-static const struct dcn_vmid_registers vmid_regs[] = {
-	vmid_regs(0),
-	vmid_regs(1),
-	vmid_regs(2),
-	vmid_regs(3),
-	vmid_regs(4),
-	vmid_regs(5),
-	vmid_regs(6),
-	vmid_regs(7),
-	vmid_regs(8),
-	vmid_regs(9),
-	vmid_regs(10),
-	vmid_regs(11),
-	vmid_regs(12),
-	vmid_regs(13),
-	vmid_regs(14),
-	vmid_regs(15)
-};
+static struct dcn_vmid_registers vmid_regs[16];
 
 static const struct dcn20_vmid_shift vmid_shifts = {
 		DCN20_VMID_MASK_SH_LIST(__SHIFT)
@@ -809,8 +658,6 @@ static const struct resource_caps res_cap_dcn32 = {
 
 static const struct dc_plane_cap plane_cap = {
 	.type = DC_PLANE_TYPE_DCN_UNIVERSAL,
-	.blends_with_above = true,
-	.blends_with_below = true,
 	.per_pixel_alpha = true,
 
 	.pixel_format_support = {
@@ -869,29 +716,26 @@ static const struct dc_debug_options debug_defaults_drv = {
 	.use_max_lb = true,
 	.force_disable_subvp = false,
 	.exit_idle_opt_for_cursor_updates = true,
+	.using_dml2 = false,
 	.enable_single_display_2to1_odm_policy = true,
-	.enable_dp_dig_pixel_rate_div_policy = 1,
-	.allow_sw_cursor_fallback = false,
-};
 
-static const struct dc_debug_options debug_defaults_diags = {
-	.disable_dmcu = true,
-	.force_abm_enable = false,
-	.timing_trace = true,
-	.clock_trace = true,
-	.disable_dpp_power_gate = true,
-	.disable_hubp_power_gate = true,
-	.disable_dsc_power_gate = true,
-	.disable_clock_gate = true,
-	.disable_pplib_clock_request = true,
-	.disable_pplib_wm_range = true,
-	.disable_stutter = false,
-	.scl_reset_length10 = true,
-	.dwb_fi_phase = -1, // -1 = disable
-	.dmub_command_table = true,
-	.enable_tri_buf = true,
-	.use_max_lb = true,
-	.force_disable_subvp = true
+	/* Must match enable_single_display_2to1_odm_policy to support dynamic ODM transitions*/
+	.enable_double_buffered_dsc_pg_support = true,
+	.enable_dp_dig_pixel_rate_div_policy = 1,
+	.allow_sw_cursor_fallback = false, // Linux can't do SW cursor "fallback"
+	.alloc_extra_way_for_cursor = true,
+	.min_prefetch_in_strobe_ns = 60000, // 60us
+	.disable_unbounded_requesting = false,
+	.override_dispclk_programming = true,
+	.disable_fpo_optimizations = false,
+	.fpo_vactive_margin_us = 2000, // 2000us
+	.disable_fpo_vactive = false,
+	.disable_boot_optimizations = false,
+	.disable_subvp_high_refresh = false,
+	.disable_dp_plus_plus_wa = true,
+	.fpo_vactive_min_active_margin_us = 200,
+	.fpo_vactive_max_blank_us = 1000,
+	.enable_legacy_fast_update = false,
 };
 
 static struct dce_aux *dcn32_aux_engine_create(
@@ -904,6 +748,14 @@ static struct dce_aux *dcn32_aux_engine_create(
 	if (!aux_engine)
 		return NULL;
 
+#undef REG_STRUCT
+#define REG_STRUCT aux_engine_regs
+	aux_engine_regs_init(0),
+	aux_engine_regs_init(1),
+	aux_engine_regs_init(2),
+	aux_engine_regs_init(3),
+	aux_engine_regs_init(4);
+
 	dce110_aux_engine_construct(aux_engine, ctx, inst,
 				    SW_AUX_TIMEOUT_PERIOD_MULTIPLIER * AUX_TIMEOUT_PERIOD,
 				    &aux_engine_regs[inst],
@@ -913,15 +765,10 @@ static struct dce_aux *dcn32_aux_engine_create(
 
 	return &aux_engine->base;
 }
-#define i2c_inst_regs(id) { I2C_HW_ENGINE_COMMON_REG_LIST_DCN30(id) }
+#define i2c_inst_regs_init(id)\
+	I2C_HW_ENGINE_COMMON_REG_LIST_DCN30_RI(id)
 
-static const struct dce_i2c_registers i2c_hw_regs[] = {
-		i2c_inst_regs(1),
-		i2c_inst_regs(2),
-		i2c_inst_regs(3),
-		i2c_inst_regs(4),
-		i2c_inst_regs(5),
-};
+static struct dce_i2c_registers i2c_hw_regs[5];
 
 static const struct dce_i2c_shift i2c_shifts = {
 		I2C_COMMON_MASK_SH_LIST_DCN30(__SHIFT)
@@ -940,6 +787,14 @@ static struct dce_i2c_hw *dcn32_i2c_hw_create(
 
 	if (!dce_i2c_hw)
 		return NULL;
+
+#undef REG_STRUCT
+#define REG_STRUCT i2c_hw_regs
+	i2c_inst_regs_init(1),
+	i2c_inst_regs_init(2),
+	i2c_inst_regs_init(3),
+	i2c_inst_regs_init(4),
+	i2c_inst_regs_init(5);
 
 	dcn2_i2c_hw_construct(dce_i2c_hw, ctx, inst,
 				    &i2c_hw_regs[inst], &i2c_shifts, &i2c_masks);
@@ -966,6 +821,7 @@ static struct clock_source *dcn32_clock_source_create(
 		return &clk_src->base;
 	}
 
+	kfree(clk_src);
 	BREAK_TO_DEBUGGER();
 	return NULL;
 }
@@ -979,6 +835,29 @@ static struct hubbub *dcn32_hubbub_create(struct dc_context *ctx)
 
 	if (!hubbub2)
 		return NULL;
+
+#undef REG_STRUCT
+#define REG_STRUCT hubbub_reg
+	hubbub_reg_init();
+
+#undef REG_STRUCT
+#define REG_STRUCT vmid_regs
+	vmid_regs_init(0),
+	vmid_regs_init(1),
+	vmid_regs_init(2),
+	vmid_regs_init(3),
+	vmid_regs_init(4),
+	vmid_regs_init(5),
+	vmid_regs_init(6),
+	vmid_regs_init(7),
+	vmid_regs_init(8),
+	vmid_regs_init(9),
+	vmid_regs_init(10),
+	vmid_regs_init(11),
+	vmid_regs_init(12),
+	vmid_regs_init(13),
+	vmid_regs_init(14),
+	vmid_regs_init(15);
 
 	hubbub32_construct(hubbub2, ctx,
 			&hubbub_reg,
@@ -1012,6 +891,13 @@ static struct hubp *dcn32_hubp_create(
 	if (!hubp2)
 		return NULL;
 
+#undef REG_STRUCT
+#define REG_STRUCT hubp_regs
+	hubp_regs_init(0),
+	hubp_regs_init(1),
+	hubp_regs_init(2),
+	hubp_regs_init(3);
+
 	if (hubp32_construct(hubp2, ctx, inst,
 			&hubp_regs[inst], &hubp_shift, &hubp_mask))
 		return &hubp2->base;
@@ -1037,6 +923,13 @@ static struct dpp *dcn32_dpp_create(
 	if (!dpp3)
 		return NULL;
 
+#undef REG_STRUCT
+#define REG_STRUCT dpp_regs
+	dpp_regs_init(0),
+	dpp_regs_init(1),
+	dpp_regs_init(2),
+	dpp_regs_init(3);
+
 	if (dpp32_construct(dpp3, ctx, inst,
 			&dpp_regs[inst], &tf_shift, &tf_mask))
 		return &dpp3->base;
@@ -1056,6 +949,10 @@ static struct mpc *dcn32_mpc_create(
 
 	if (!mpc30)
 		return NULL;
+
+#undef REG_STRUCT
+#define REG_STRUCT mpc_regs
+	dcn_mpc_regs_init();
 
 	dcn32_mpc_construct(mpc30, ctx,
 			&mpc_regs,
@@ -1078,6 +975,13 @@ static struct output_pixel_processor *dcn32_opp_create(
 		return NULL;
 	}
 
+#undef REG_STRUCT
+#define REG_STRUCT opp_regs
+	opp_regs_init(0),
+	opp_regs_init(1),
+	opp_regs_init(2),
+	opp_regs_init(3);
+
 	dcn20_opp_construct(opp2, ctx, inst,
 			&opp_regs[inst], &opp_shift, &opp_mask);
 	return &opp2->base;
@@ -1093,6 +997,13 @@ static struct timing_generator *dcn32_timing_generator_create(
 
 	if (!tgn10)
 		return NULL;
+
+#undef REG_STRUCT
+#define REG_STRUCT optc_regs
+	optc_regs_init(0),
+	optc_regs_init(1),
+	optc_regs_init(2),
+	optc_regs_init(3);
 
 	tgn10->base.inst = instance;
 	tgn10->base.ctx = ctx;
@@ -1128,6 +1039,30 @@ static struct link_encoder *dcn32_link_encoder_create(
 	if (!enc20)
 		return NULL;
 
+#undef REG_STRUCT
+#define REG_STRUCT link_enc_aux_regs
+	aux_regs_init(0),
+	aux_regs_init(1),
+	aux_regs_init(2),
+	aux_regs_init(3),
+	aux_regs_init(4);
+
+#undef REG_STRUCT
+#define REG_STRUCT link_enc_hpd_regs
+	hpd_regs_init(0),
+	hpd_regs_init(1),
+	hpd_regs_init(2),
+	hpd_regs_init(3),
+	hpd_regs_init(4);
+
+#undef REG_STRUCT
+#define REG_STRUCT link_enc_regs
+	link_regs_init(0, A),
+	link_regs_init(1, B),
+	link_regs_init(2, C),
+	link_regs_init(3, D),
+	link_regs_init(4, E);
+
 	dcn32_link_encoder_construct(enc20,
 			enc_init_data,
 			&link_enc_feature,
@@ -1157,7 +1092,7 @@ static void read_dce_straps(
 	struct dc_context *ctx,
 	struct resource_straps *straps)
 {
-	generic_reg_get(ctx, regDC_PINSTRAPS + BASE(regDC_PINSTRAPS_BASE_IDX),
+	generic_reg_get(ctx, ctx->dcn_reg_offsets[regDC_PINSTRAPS_BASE_IDX] + regDC_PINSTRAPS,
 		FN(DC_PINSTRAPS, DC_PINSTRAPS_AUDIO), &straps->dc_pinstraps_audio);
 
 }
@@ -1165,6 +1100,15 @@ static void read_dce_straps(
 static struct audio *dcn32_create_audio(
 		struct dc_context *ctx, unsigned int inst)
 {
+
+#undef REG_STRUCT
+#define REG_STRUCT audio_regs
+	audio_regs_init(0),
+	audio_regs_init(1),
+	audio_regs_init(2),
+	audio_regs_init(3),
+	audio_regs_init(4);
+
 	return dce_audio_create(ctx, inst,
 			&audio_regs[inst], &audio_shift, &audio_mask);
 }
@@ -1177,6 +1121,19 @@ static struct vpg *dcn32_vpg_create(
 
 	if (!vpg3)
 		return NULL;
+
+#undef REG_STRUCT
+#define REG_STRUCT vpg_regs
+	vpg_regs_init(0),
+	vpg_regs_init(1),
+	vpg_regs_init(2),
+	vpg_regs_init(3),
+	vpg_regs_init(4),
+	vpg_regs_init(5),
+	vpg_regs_init(6),
+	vpg_regs_init(7),
+	vpg_regs_init(8),
+	vpg_regs_init(9);
 
 	vpg3_construct(vpg3, ctx, inst,
 			&vpg_regs[inst],
@@ -1195,6 +1152,15 @@ static struct afmt *dcn32_afmt_create(
 	if (!afmt3)
 		return NULL;
 
+#undef REG_STRUCT
+#define REG_STRUCT afmt_regs
+	afmt_regs_init(0),
+	afmt_regs_init(1),
+	afmt_regs_init(2),
+	afmt_regs_init(3),
+	afmt_regs_init(4),
+	afmt_regs_init(5);
+
 	afmt3_construct(afmt3, ctx, inst,
 			&afmt_regs[inst],
 			&afmt_shift,
@@ -1211,6 +1177,13 @@ static struct apg *dcn31_apg_create(
 
 	if (!apg31)
 		return NULL;
+
+#undef REG_STRUCT
+#define REG_STRUCT apg_regs
+	apg_regs_init(0),
+	apg_regs_init(1),
+	apg_regs_init(2),
+	apg_regs_init(3);
 
 	apg31_construct(apg31, ctx, inst,
 			&apg_regs[inst],
@@ -1247,6 +1220,14 @@ static struct stream_encoder *dcn32_stream_encoder_create(
 		kfree(afmt);
 		return NULL;
 	}
+
+#undef REG_STRUCT
+#define REG_STRUCT stream_enc_regs
+	stream_enc_regs_init(0),
+	stream_enc_regs_init(1),
+	stream_enc_regs_init(2),
+	stream_enc_regs_init(3),
+	stream_enc_regs_init(4);
 
 	dcn32_dio_stream_encoder_construct(enc1, ctx, ctx->dc_bios,
 					eng_id, vpg, afmt,
@@ -1298,6 +1279,13 @@ static struct hpo_dp_stream_encoder *dcn32_hpo_dp_stream_encoder_create(
 		return NULL;
 	}
 
+#undef REG_STRUCT
+#define REG_STRUCT hpo_dp_stream_enc_regs
+	hpo_dp_stream_encoder_reg_init(0),
+	hpo_dp_stream_encoder_reg_init(1),
+	hpo_dp_stream_encoder_reg_init(2),
+	hpo_dp_stream_encoder_reg_init(3);
+
 	dcn31_hpo_dp_stream_encoder_construct(hpo_dp_enc31, ctx, ctx->dc_bios,
 					hpo_dp_inst, eng_id, vpg, apg,
 					&hpo_dp_stream_enc_regs[hpo_dp_inst],
@@ -1315,6 +1303,11 @@ static struct hpo_dp_link_encoder *dcn32_hpo_dp_link_encoder_create(
 	/* allocate HPO link encoder */
 	hpo_dp_enc31 = kzalloc(sizeof(struct dcn31_hpo_dp_link_encoder), GFP_KERNEL);
 
+#undef REG_STRUCT
+#define REG_STRUCT hpo_dp_link_enc_regs
+	hpo_dp_link_encoder_reg_init(0),
+	hpo_dp_link_encoder_reg_init(1);
+
 	hpo_dp_link_encoder32_construct(hpo_dp_enc31, ctx, inst,
 					&hpo_dp_link_enc_regs[inst],
 					&hpo_dp_le_shift, &hpo_dp_le_mask);
@@ -1326,6 +1319,10 @@ static struct dce_hwseq *dcn32_hwseq_create(
 	struct dc_context *ctx)
 {
 	struct dce_hwseq *hws = kzalloc(sizeof(struct dce_hwseq), GFP_KERNEL);
+
+#undef REG_STRUCT
+#define REG_STRUCT hwseq_reg
+	hwseq_reg_init();
 
 	if (hws) {
 		hws->ctx = ctx;
@@ -1339,15 +1336,6 @@ static const struct resource_create_funcs res_create_funcs = {
 	.read_dce_straps = read_dce_straps,
 	.create_audio = dcn32_create_audio,
 	.create_stream_encoder = dcn32_stream_encoder_create,
-	.create_hpo_dp_stream_encoder = dcn32_hpo_dp_stream_encoder_create,
-	.create_hpo_dp_link_encoder = dcn32_hpo_dp_link_encoder_create,
-	.create_hwseq = dcn32_hwseq_create,
-};
-
-static const struct resource_create_funcs res_create_maximus_funcs = {
-	.read_dce_straps = NULL,
-	.create_audio = NULL,
-	.create_stream_encoder = NULL,
 	.create_hpo_dp_stream_encoder = dcn32_hpo_dp_stream_encoder_create,
 	.create_hpo_dp_link_encoder = dcn32_hpo_dp_link_encoder_create,
 	.create_hwseq = dcn32_hwseq_create,
@@ -1499,8 +1487,11 @@ static void dcn32_resource_destruct(struct dcn32_resource_pool *pool)
 	if (pool->base.dccg != NULL)
 		dcn_dccg_destroy(&pool->base.dccg);
 
-	if (pool->base.oem_device != NULL)
-		dal_ddc_service_destroy(&pool->base.oem_device);
+	if (pool->base.oem_device != NULL) {
+		struct dc *dc = pool->base.oem_device->ctx->dc;
+
+		dc->link_srv->destroy_ddc_service(&pool->base.oem_device);
+	}
 }
 
 
@@ -1517,6 +1508,10 @@ static bool dcn32_dwbc_create(struct dc_context *ctx, struct resource_pool *pool
 			dm_error("DC: failed to create dwbc30!\n");
 			return false;
 		}
+
+#undef REG_STRUCT
+#define REG_STRUCT dwbc30_regs
+		dwbc_regs_dcn3_init(0);
 
 		dcn30_dwbc_construct(dwbc30, ctx,
 				&dwbc30_regs[i],
@@ -1543,6 +1538,10 @@ static bool dcn32_mmhubbub_create(struct dc_context *ctx, struct resource_pool *
 			return false;
 		}
 
+#undef REG_STRUCT
+#define REG_STRUCT mcif_wb30_regs
+		mcif_wb_regs_dcn3_init(0);
+
 		dcn32_mmhubbub_construct(mcif_wb30, ctx,
 				&mcif_wb30_regs[i],
 				&mcif_wb30_shift,
@@ -1564,6 +1563,13 @@ static struct display_stream_compressor *dcn32_dsc_create(
 		BREAK_TO_DEBUGGER();
 		return NULL;
 	}
+
+#undef REG_STRUCT
+#define REG_STRUCT dsc_regs
+	dsc_regsDCN20_init(0),
+	dsc_regsDCN20_init(1),
+	dsc_regsDCN20_init(2),
+	dsc_regsDCN20_init(3);
 
 	dsc2_construct(dsc, ctx, inst, &dsc_regs[inst], &dsc_shift, &dsc_mask);
 
@@ -1589,7 +1595,6 @@ bool dcn32_acquire_post_bldn_3dlut(
 		struct dc_transfer_func **shaper)
 {
 	bool ret = false;
-	union dc_3dlut_state *state;
 
 	ASSERT(*lut == NULL && *shaper == NULL);
 	*lut = NULL;
@@ -1598,7 +1603,6 @@ bool dcn32_acquire_post_bldn_3dlut(
 	if (!res_ctx->is_mpc_3dlut_acquired[mpcc_id]) {
 		*lut = pool->mpc_lut[mpcc_id];
 		*shaper = pool->mpc_shaper[mpcc_id];
-		state = &pool->mpc_lut[mpcc_id]->state;
 		res_ctx->is_mpc_3dlut_acquired[mpcc_id] = true;
 		ret = true;
 	}
@@ -1659,7 +1663,9 @@ static void dcn32_enable_phantom_plane(struct dc *dc,
 
 		/* Shadow pipe has small viewport. */
 		phantom_plane->clip_rect.y = 0;
-		phantom_plane->clip_rect.height = phantom_stream->timing.v_addressable;
+		phantom_plane->clip_rect.height = phantom_stream->src.height;
+
+		phantom_plane->is_phantom = true;
 
 		dc_add_plane_to_context(dc, phantom_stream, phantom_plane, context);
 
@@ -1697,25 +1703,72 @@ static struct dc_stream_state *dcn32_enable_phantom_stream(struct dc *dc,
 	return phantom_stream;
 }
 
+void dcn32_retain_phantom_pipes(struct dc *dc, struct dc_state *context)
+{
+	int i;
+	struct dc_plane_state *phantom_plane = NULL;
+	struct dc_stream_state *phantom_stream = NULL;
+
+	for (i = 0; i < dc->res_pool->pipe_count; i++) {
+		struct pipe_ctx *pipe = &context->res_ctx.pipe_ctx[i];
+
+		if (resource_is_pipe_type(pipe, OTG_MASTER) &&
+				resource_is_pipe_type(pipe, DPP_PIPE) &&
+				pipe->stream->mall_stream_config.type == SUBVP_PHANTOM) {
+			phantom_plane = pipe->plane_state;
+			phantom_stream = pipe->stream;
+
+			dc_plane_state_retain(phantom_plane);
+			dc_stream_retain(phantom_stream);
+		}
+	}
+}
+
 // return true if removed piped from ctx, false otherwise
-bool dcn32_remove_phantom_pipes(struct dc *dc, struct dc_state *context)
+bool dcn32_remove_phantom_pipes(struct dc *dc, struct dc_state *context, bool fast_update)
 {
 	int i;
 	bool removed_pipe = false;
+	struct dc_plane_state *phantom_plane = NULL;
+	struct dc_stream_state *phantom_stream = NULL;
 
 	for (i = 0; i < dc->res_pool->pipe_count; i++) {
 		struct pipe_ctx *pipe = &context->res_ctx.pipe_ctx[i];
 		// build scaling params for phantom pipes
 		if (pipe->plane_state && pipe->stream && pipe->stream->mall_stream_config.type == SUBVP_PHANTOM) {
+			phantom_plane = pipe->plane_state;
+			phantom_stream = pipe->stream;
+
 			dc_rem_all_planes_for_stream(dc, pipe->stream, context);
 			dc_remove_stream_from_ctx(dc, context, pipe->stream);
+
+			/* Ref count is incremented on allocation and also when added to the context.
+			 * Therefore we must call release for the the phantom plane and stream once
+			 * they are removed from the ctx to finally decrement the refcount to 0 to free.
+			 */
+			dc_plane_state_release(phantom_plane);
+			dc_stream_release(phantom_stream);
+
 			removed_pipe = true;
 		}
 
-		// Clear all phantom stream info
-		if (pipe->stream) {
-			pipe->stream->mall_stream_config.type = SUBVP_NONE;
-			pipe->stream->mall_stream_config.paired_stream = NULL;
+		/* For non-full updates, a shallow copy of the current state
+		 * is created. In this case we don't want to erase the current
+		 * state (there can be 2 HIRQL threads, one in flip, and one in
+		 * checkMPO) that can cause a race condition.
+		 *
+		 * This is just a workaround, needs a proper fix.
+		 */
+		if (!fast_update) {
+			// Clear all phantom stream info
+			if (pipe->stream) {
+				pipe->stream->mall_stream_config.type = SUBVP_NONE;
+				pipe->stream->mall_stream_config.paired_stream = NULL;
+			}
+
+			if (pipe->plane_state) {
+				pipe->plane_state->is_phantom = false;
+			}
 		}
 	}
 	return removed_pipe;
@@ -1755,9 +1808,7 @@ void dcn32_add_phantom_pipes(struct dc *dc, struct dc_state *context,
 	}
 }
 
-bool dcn32_validate_bandwidth(struct dc *dc,
-		struct dc_state *context,
-		bool fast_validate)
+static bool dml1_validate(struct dc *dc, struct dc_state *context, bool fast_validate)
 {
 	bool out = false;
 
@@ -1766,13 +1817,38 @@ bool dcn32_validate_bandwidth(struct dc *dc,
 	int vlevel = 0;
 	int pipe_cnt = 0;
 	display_e2e_pipe_params_st *pipes = kzalloc(dc->res_pool->pipe_count * sizeof(display_e2e_pipe_params_st), GFP_KERNEL);
+	struct mall_temp_config mall_temp_config;
+
+	/* To handle Freesync properly, setting FreeSync DML parameters
+	 * to its default state for the first stage of validation
+	 */
+	context->bw_ctx.bw.dcn.clk.fw_based_mclk_switching = false;
+	context->bw_ctx.dml.soc.dram_clock_change_requirement_final = true;
+
 	DC_LOGGER_INIT(dc->ctx->logger);
+
+	/* For fast validation, there are situations where a shallow copy of
+	 * of the dc->current_state is created for the validation. In this case
+	 * we want to save and restore the mall config because we always
+	 * teardown subvp at the beginning of validation (and don't attempt
+	 * to add it back if it's fast validation). If we don't restore the
+	 * subvp config in cases of fast validation + shallow copy of the
+	 * dc->current_state, the dc->current_state will have a partially
+	 * removed subvp state when we did not intend to remove it.
+	 */
+	if (fast_validate) {
+		memset(&mall_temp_config, 0, sizeof(mall_temp_config));
+		dcn32_save_mall_state(dc, context, &mall_temp_config);
+	}
 
 	BW_VAL_TRACE_COUNT();
 
 	DC_FP_START();
 	out = dcn32_internal_validate_bw(dc, context, pipes, &pipe_cnt, &vlevel, fast_validate);
 	DC_FP_END();
+
+	if (fast_validate)
+		dcn32_restore_mall_state(dc, context, &mall_temp_config);
 
 	if (pipe_cnt == 0)
 		goto validate_out;
@@ -1788,6 +1864,8 @@ bool dcn32_validate_bandwidth(struct dc *dc,
 	}
 
 	dc->res_pool->funcs->calculate_wm_and_dlg(dc, context, pipes, pipe_cnt, vlevel);
+
+	dcn32_override_min_req_memclk(dc, context);
 
 	BW_VAL_TRACE_END_WATERMARKS();
 
@@ -1808,10 +1886,17 @@ validate_out:
 	return out;
 }
 
-
-static bool is_dual_plane(enum surface_pixel_format format)
+bool dcn32_validate_bandwidth(struct dc *dc,
+		struct dc_state *context,
+		bool fast_validate)
 {
-	return format >= SURFACE_PIXEL_FORMAT_VIDEO_BEGIN || format == SURFACE_PIXEL_FORMAT_GRPH_RGBE_ALPHA;
+	bool out = false;
+
+	if (dc->debug.using_dml2)
+		out = dml2_validate(dc, context, fast_validate);
+	else
+		out = dml1_validate(dc, context, fast_validate);
+	return out;
 }
 
 int dcn32_populate_dml_pipes_from_context(
@@ -1821,9 +1906,8 @@ int dcn32_populate_dml_pipes_from_context(
 {
 	int i, pipe_cnt;
 	struct resource_context *res_ctx = &context->res_ctx;
-	struct pipe_ctx *pipe;
-	bool subvp_in_use = false, is_pipe_split_expected[MAX_PIPES];
-	int plane_count = 0;
+	struct pipe_ctx *pipe = NULL;
+	bool subvp_in_use = false;
 	struct dc_crtc_timing *timing;
 
 	dcn20_populate_dml_pipes_from_context(dc, context, pipes, fast_validate);
@@ -1836,30 +1920,37 @@ int dcn32_populate_dml_pipes_from_context(
 		timing = &pipe->stream->timing;
 
 		pipes[pipe_cnt].pipe.src.gpuvm = true;
-		pipes[pipe_cnt].pipe.src.dcc_fraction_of_zs_req_luma = 0;
-		pipes[pipe_cnt].pipe.src.dcc_fraction_of_zs_req_chroma = 0;
+		DC_FP_START();
+		dcn32_zero_pipe_dcc_fraction(pipes, pipe_cnt);
+		DC_FP_END();
 		pipes[pipe_cnt].pipe.dest.vfront_porch = timing->v_front_porch;
+		pipes[pipe_cnt].pipe.dest.odm_combine_policy = dm_odm_combine_policy_dal;
 		pipes[pipe_cnt].pipe.src.gpuvm_min_page_size_kbytes = 256; // according to spreadsheet
 		pipes[pipe_cnt].pipe.src.unbounded_req_mode = false;
 		pipes[pipe_cnt].pipe.scale_ratio_depth.lb_depth = dm_lb_19;
 
-		switch (pipe->stream->mall_stream_config.type) {
-		case SUBVP_MAIN:
-			pipes[pipe_cnt].pipe.src.use_mall_for_pstate_change = dm_use_mall_pstate_change_sub_viewport;
-			subvp_in_use = true;
-			break;
-		case SUBVP_PHANTOM:
-			pipes[pipe_cnt].pipe.src.use_mall_for_pstate_change = dm_use_mall_pstate_change_phantom_pipe;
-			pipes[pipe_cnt].pipe.src.use_mall_for_static_screen = dm_use_mall_static_screen_disable;
-			// Disallow unbounded req for SubVP according to DCHUB programming guide
-			pipes[pipe_cnt].pipe.src.unbounded_req_mode = false;
-			break;
-		case SUBVP_NONE:
-			pipes[pipe_cnt].pipe.src.use_mall_for_pstate_change = dm_use_mall_pstate_change_disable;
-			pipes[pipe_cnt].pipe.src.use_mall_for_static_screen = dm_use_mall_static_screen_disable;
-			break;
-		default:
-			break;
+		/* Only populate DML input with subvp info for full updates.
+		 * This is just a workaround -- needs a proper fix.
+		 */
+		if (!fast_validate) {
+			switch (pipe->stream->mall_stream_config.type) {
+			case SUBVP_MAIN:
+				pipes[pipe_cnt].pipe.src.use_mall_for_pstate_change = dm_use_mall_pstate_change_sub_viewport;
+				subvp_in_use = true;
+				break;
+			case SUBVP_PHANTOM:
+				pipes[pipe_cnt].pipe.src.use_mall_for_pstate_change = dm_use_mall_pstate_change_phantom_pipe;
+				pipes[pipe_cnt].pipe.src.use_mall_for_static_screen = dm_use_mall_static_screen_disable;
+				// Disallow unbounded req for SubVP according to DCHUB programming guide
+				pipes[pipe_cnt].pipe.src.unbounded_req_mode = false;
+				break;
+			case SUBVP_NONE:
+				pipes[pipe_cnt].pipe.src.use_mall_for_pstate_change = dm_use_mall_pstate_change_disable;
+				pipes[pipe_cnt].pipe.src.use_mall_for_static_screen = dm_use_mall_static_screen_disable;
+				break;
+			default:
+				break;
+			}
 		}
 
 		pipes[pipe_cnt].dout.dsc_input_bpc = 0;
@@ -1880,39 +1971,7 @@ int dcn32_populate_dml_pipes_from_context(
 			}
 		}
 
-		/* Calculate the number of planes we have so we can determine
-		 *  whether to apply ODM 2to1 policy or not
-		 */
-		if (pipe->stream && !pipe->prev_odm_pipe &&
-				(!pipe->top_pipe || pipe->top_pipe->plane_state != pipe->plane_state))
-			++plane_count;
 
-		DC_FP_START();
-		is_pipe_split_expected[i] = dcn32_predict_pipe_split(context, pipes[i].pipe, i);
-		DC_FP_END();
-
-		pipe_cnt++;
-	}
-
-	/* Determine whether we will apply ODM 2to1 policy
-	 * Applies to single display and where the number of planes is less than 3
-	 * For 3 plane case ( 2 MPO planes ), we will not set the policy for the MPO pipes
-	 */
-	for (i = 0, pipe_cnt = 0; i < dc->res_pool->pipe_count; i++) {
-		if (!res_ctx->pipe_ctx[i].stream)
-			continue;
-		pipe = &res_ctx->pipe_ctx[i];
-		timing = &pipe->stream->timing;
-
-		pipes[pipe_cnt].pipe.dest.odm_combine_policy = dm_odm_combine_policy_dal;
-		res_ctx->pipe_ctx[i].stream->odm_2to1_policy_applied  = false;
-		if (context->stream_count == 1 && timing->dsc_cfg.num_slices_h != 1) {
-			if (dc->debug.enable_single_display_2to1_odm_policy) {
-				if (!((plane_count > 2) && pipe->top_pipe))
-					pipes[pipe_cnt].pipe.dest.odm_combine_policy = dm_odm_combine_policy_2to1;
-			}
-			res_ctx->pipe_ctx[i].stream->odm_2to1_policy_applied = true;
-		}
 		pipe_cnt++;
 	}
 
@@ -1920,24 +1979,12 @@ int dcn32_populate_dml_pipes_from_context(
 	 * the DET available for each pipe). Use the DET override input to maintain our driver
 	 * policy.
 	 */
-	if (pipe_cnt == 1 && !is_pipe_split_expected[0]) {
-		pipes[0].pipe.src.det_size_override = DCN3_2_MAX_DET_SIZE;
-		if (pipe->plane_state && !dc->debug.disable_z9_mpc) {
-			if (!is_dual_plane(pipe->plane_state->format)) {
-				pipes[0].pipe.src.det_size_override = DCN3_2_DEFAULT_DET_SIZE;
-				pipes[0].pipe.src.unbounded_req_mode = true;
-				if (pipe->plane_state->src_rect.width >= 5120 &&
-					pipe->plane_state->src_rect.height >= 2880)
-					pipes[0].pipe.src.det_size_override = 320; // 5K or higher
-			}
-		}
-	} else
-		dcn32_determine_det_override(context, pipes, is_pipe_split_expected, dc->res_pool->pipe_count);
+	dcn32_set_det_allocations(dc, context, pipes);
 
 	// In general cases we want to keep the dram clock change requirement
 	// (prefer configs that support MCLK switch). Only override to false
 	// for SubVP
-	if (subvp_in_use)
+	if (context->bw_ctx.bw.dcn.clk.fw_based_mclk_switching || subvp_in_use)
 		context->bw_ctx.dml.soc.dram_clock_change_requirement_final = false;
 	else
 		context->bw_ctx.dml.soc.dram_clock_change_requirement_final = true;
@@ -1946,7 +1993,8 @@ int dcn32_populate_dml_pipes_from_context(
 }
 
 static struct dc_cap_funcs cap_funcs = {
-	.get_dcc_compression_cap = dcn20_get_dcc_compression_cap
+	.get_dcc_compression_cap = dcn20_get_dcc_compression_cap,
+	.get_subvp_en = dcn32_subvp_in_use,
 };
 
 void dcn32_calculate_wm_and_dlg(struct dc *dc, struct dc_state *context,
@@ -1974,7 +2022,9 @@ static struct resource_funcs dcn32_res_pool_funcs = {
 	.validate_bandwidth = dcn32_validate_bandwidth,
 	.calculate_wm_and_dlg = dcn32_calculate_wm_and_dlg,
 	.populate_dml_pipes = dcn32_populate_dml_pipes_from_context,
-	.acquire_idle_pipe_for_head_pipe_in_layer = dcn32_acquire_idle_pipe_for_head_pipe_in_layer,
+	.acquire_free_pipe_as_secondary_dpp_pipe = dcn32_acquire_free_pipe_as_secondary_dpp_pipe,
+	.acquire_free_pipe_as_secondary_opp_head = dcn32_acquire_free_pipe_as_secondary_opp_head,
+	.release_pipe = dcn20_release_pipe,
 	.add_stream_to_ctx = dcn30_add_stream_to_ctx,
 	.add_dsc_to_stream_resource = dcn20_add_dsc_to_stream_resource,
 	.remove_stream_from_ctx = dcn20_remove_stream_from_ctx,
@@ -1988,7 +2038,18 @@ static struct resource_funcs dcn32_res_pool_funcs = {
 	.update_soc_for_wm_a = dcn30_update_soc_for_wm_a,
 	.add_phantom_pipes = dcn32_add_phantom_pipes,
 	.remove_phantom_pipes = dcn32_remove_phantom_pipes,
+	.retain_phantom_pipes = dcn32_retain_phantom_pipes,
+	.save_mall_state = dcn32_save_mall_state,
+	.restore_mall_state = dcn32_restore_mall_state,
 };
+
+static uint32_t read_pipe_fuses(struct dc_context *ctx)
+{
+	uint32_t value = REG_READ(CC_DC_PIPE_DIS);
+	/* DCN32 support max 4 pipes */
+	value = value & 0xf;
+	return value;
+}
 
 
 static bool dcn32_resource_construct(
@@ -2003,6 +2064,29 @@ static bool dcn32_resource_construct(
 	uint32_t pipe_fuses = 0;
 	uint32_t num_pipes  = 4;
 
+#undef REG_STRUCT
+#define REG_STRUCT bios_regs
+	bios_regs_init();
+
+#undef REG_STRUCT
+#define REG_STRUCT clk_src_regs
+	clk_src_regs_init(0, A),
+	clk_src_regs_init(1, B),
+	clk_src_regs_init(2, C),
+	clk_src_regs_init(3, D),
+	clk_src_regs_init(4, E);
+
+#undef REG_STRUCT
+#define REG_STRUCT abm_regs
+	abm_regs_init(0),
+	abm_regs_init(1),
+	abm_regs_init(2),
+	abm_regs_init(3);
+
+#undef REG_STRUCT
+#define REG_STRUCT dccg_regs
+	dccg_regs_init();
+
 	DC_FP_START();
 
 	ctx->dc_bios->regs = &bios_regs;
@@ -2010,7 +2094,7 @@ static bool dcn32_resource_construct(
 	pool->base.res_cap = &res_cap_dcn32;
 	/* max number of pipes for ASIC before checking for pipe fuses */
 	num_pipes  = pool->base.res_cap->num_timing_generator;
-	pipe_fuses = REG_READ(CC_DC_PIPE_DIS);
+	pipe_fuses = read_pipe_fuses(ctx);
 
 	for (i = 0; i < pool->base.res_cap->num_timing_generator; i++)
 		if (pipe_fuses & 1 << i)
@@ -2044,29 +2128,41 @@ static bool dcn32_resource_construct(
 	dc->caps.max_cursor_size = 64;
 	dc->caps.min_horizontal_blanking_period = 80;
 	dc->caps.dmdata_alloc_size = 2048;
-	dc->caps.mall_size_per_mem_channel = 0;
+	dc->caps.mall_size_per_mem_channel = 4;
 	dc->caps.mall_size_total = 0;
 	dc->caps.cursor_cache_size = dc->caps.max_cursor_size * dc->caps.max_cursor_size * 8;
 
 	dc->caps.cache_line_size = 64;
 	dc->caps.cache_num_ways = 16;
-	dc->caps.max_cab_allocation_bytes = 67108864; // 64MB = 1024 * 1024 * 64
+
+	/* Calculate the available MALL space */
+	dc->caps.max_cab_allocation_bytes = dcn32_calc_num_avail_chans_for_mall(
+		dc, dc->ctx->dc_bios->vram_info.num_chans) *
+		dc->caps.mall_size_per_mem_channel * 1024 * 1024;
+	dc->caps.mall_size_total = dc->caps.max_cab_allocation_bytes;
+
 	dc->caps.subvp_fw_processing_delay_us = 15;
+	dc->caps.subvp_drr_max_vblank_margin_us = 40;
 	dc->caps.subvp_prefetch_end_to_mall_start_us = 15;
 	dc->caps.subvp_swath_height_margin_lines = 16;
 	dc->caps.subvp_pstate_allow_width_us = 20;
 	dc->caps.subvp_vertical_int_margin_us = 30;
+	dc->caps.subvp_drr_vblank_start_margin_us = 100; // 100us margin
 
 	dc->caps.max_slave_planes = 2;
 	dc->caps.max_slave_yuv_planes = 2;
 	dc->caps.max_slave_rgb_planes = 2;
 	dc->caps.post_blend_color_processing = true;
 	dc->caps.force_dp_tps4_for_cp2520 = true;
+	if (dc->config.forceHBR2CP2520)
+		dc->caps.force_dp_tps4_for_cp2520 = false;
 	dc->caps.dp_hpo = true;
 	dc->caps.dp_hdmi21_pcon_support = true;
 	dc->caps.edp_dsc_support = true;
 	dc->caps.extended_aux_timeout_support = true;
 	dc->caps.dmcub_support = true;
+	dc->caps.seamless_odm = true;
+	dc->caps.max_v_total = (1 << 15) - 1;
 
 	/* Color pipeline capabilities */
 	dc->caps.color.dpp.dcn_arch = 1;
@@ -2105,6 +2201,7 @@ static bool dcn32_resource_construct(
 	/* Use pipe context based otg sync logic */
 	dc->config.use_pipe_ctx_sync_logic = true;
 
+	dc->config.dc_mode_clk_limit_support = true;
 	/* read VBIOS LTTPR caps */
 	{
 		if (ctx->dc_bios->funcs->get_lttpr_caps) {
@@ -2123,10 +2220,7 @@ static bool dcn32_resource_construct(
 
 	if (dc->ctx->dce_environment == DCE_ENV_PRODUCTION_DRV)
 		dc->debug = debug_defaults_drv;
-	else if (dc->ctx->dce_environment == DCE_ENV_FPGA_MAXIMUS) {
-		dc->debug = debug_defaults_diags;
-	} else
-		dc->debug = debug_defaults_diags;
+
 	// Init the vm_helper
 	if (dc->vm_helper)
 		vm_helper_init(dc->vm_helper, 16);
@@ -2182,8 +2276,7 @@ static bool dcn32_resource_construct(
 	}
 
 	/* DML */
-	if (!IS_FPGA_MAXIMUS_DC(dc->ctx->dce_environment))
-		dml_init_instance(&dc->dml, &dcn3_2_soc, &dcn3_2_ip, DML_PROJECT_DCN32);
+	dml_init_instance(&dc->dml, &dcn3_2_soc, &dcn3_2_ip, DML_PROJECT_DCN32);
 
 	/* IRQ Service */
 	init_data.ctx = dc->ctx;
@@ -2320,9 +2413,8 @@ static bool dcn32_resource_construct(
 
 	/* Audio, HWSeq, Stream Encoders including HPO and virtual, MPC 3D LUTs */
 	if (!resource_construct(num_virtual_links, dc, &pool->base,
-			(!IS_FPGA_MAXIMUS_DC(dc->ctx->dce_environment) ?
-			&res_create_funcs : &res_create_maximus_funcs)))
-			goto create_fail;
+			&res_create_funcs))
+		goto create_fail;
 
 	/* HW Sequencer init functions and Plane caps */
 	dcn32_hw_sequencer_init_functions(dc);
@@ -2340,10 +2432,60 @@ static bool dcn32_resource_construct(
 		ddc_init_data.id.id = dc->ctx->dc_bios->fw_info.oem_i2c_obj_id;
 		ddc_init_data.id.enum_id = 0;
 		ddc_init_data.id.type = OBJECT_TYPE_GENERIC;
-		pool->base.oem_device = dal_ddc_service_create(&ddc_init_data);
+		pool->base.oem_device = dc->link_srv->create_ddc_service(&ddc_init_data);
 	} else {
 		pool->base.oem_device = NULL;
 	}
+
+	dc->dml2_options.dcn_pipe_count = pool->base.pipe_count;
+	dc->dml2_options.use_native_pstate_optimization = false;
+	dc->dml2_options.use_native_soc_bb_construction = true;
+	dc->dml2_options.minimize_dispclk_using_odm = true;
+
+	dc->dml2_options.callbacks.dc = dc;
+	dc->dml2_options.callbacks.build_scaling_params = &resource_build_scaling_params;
+	dc->dml2_options.callbacks.can_support_mclk_switch_using_fw_based_vblank_stretch = &dcn30_can_support_mclk_switch_using_fw_based_vblank_stretch;
+	dc->dml2_options.callbacks.acquire_secondary_pipe_for_mpc_odm = &dc_resource_acquire_secondary_pipe_for_mpc_odm_legacy;
+	dc->dml2_options.callbacks.update_pipes_for_stream_with_slice_count = &resource_update_pipes_for_stream_with_slice_count;
+	dc->dml2_options.callbacks.update_pipes_for_plane_with_slice_count = &resource_update_pipes_for_plane_with_slice_count;
+	dc->dml2_options.callbacks.get_mpc_slice_index = &resource_get_mpc_slice_index;
+	dc->dml2_options.callbacks.get_odm_slice_index = &resource_get_odm_slice_index;
+	dc->dml2_options.callbacks.get_opp_head = &resource_get_opp_head;
+
+	dc->dml2_options.svp_pstate.callbacks.dc = dc;
+	dc->dml2_options.svp_pstate.callbacks.add_plane_to_context = &dc_add_plane_to_context;
+	dc->dml2_options.svp_pstate.callbacks.add_stream_to_ctx = &dc_add_stream_to_ctx;
+	dc->dml2_options.svp_pstate.callbacks.build_scaling_params = &resource_build_scaling_params;
+	dc->dml2_options.svp_pstate.callbacks.create_plane = &dc_create_plane_state;
+	dc->dml2_options.svp_pstate.callbacks.remove_plane_from_context = &dc_remove_plane_from_context;
+	dc->dml2_options.svp_pstate.callbacks.remove_stream_from_ctx = &dc_remove_stream_from_ctx;
+	dc->dml2_options.svp_pstate.callbacks.create_stream_for_sink = &dc_create_stream_for_sink;
+	dc->dml2_options.svp_pstate.callbacks.plane_state_release = &dc_plane_state_release;
+	dc->dml2_options.svp_pstate.callbacks.stream_release = &dc_stream_release;
+	dc->dml2_options.svp_pstate.callbacks.release_dsc = &dcn20_release_dsc;
+
+	dc->dml2_options.svp_pstate.subvp_fw_processing_delay_us = dc->caps.subvp_fw_processing_delay_us;
+	dc->dml2_options.svp_pstate.subvp_prefetch_end_to_mall_start_us = dc->caps.subvp_prefetch_end_to_mall_start_us;
+	dc->dml2_options.svp_pstate.subvp_pstate_allow_width_us = dc->caps.subvp_pstate_allow_width_us;
+	dc->dml2_options.svp_pstate.subvp_swath_height_margin_lines = dc->caps.subvp_swath_height_margin_lines;
+
+	dc->dml2_options.svp_pstate.force_disable_subvp = dc->debug.force_disable_subvp;
+	dc->dml2_options.svp_pstate.force_enable_subvp = dc->debug.force_subvp_mclk_switch;
+
+	dc->dml2_options.mall_cfg.cache_line_size_bytes = dc->caps.cache_line_size;
+	dc->dml2_options.mall_cfg.cache_num_ways = dc->caps.cache_num_ways;
+	dc->dml2_options.mall_cfg.max_cab_allocation_bytes = dc->caps.max_cab_allocation_bytes;
+	dc->dml2_options.mall_cfg.mblk_height_4bpe_pixels = DCN3_2_MBLK_HEIGHT_4BPE;
+	dc->dml2_options.mall_cfg.mblk_height_8bpe_pixels = DCN3_2_MBLK_HEIGHT_8BPE;
+	dc->dml2_options.mall_cfg.mblk_size_bytes = DCN3_2_MALL_MBLK_SIZE_BYTES;
+	dc->dml2_options.mall_cfg.mblk_width_pixels = DCN3_2_MBLK_WIDTH;
+
+	dc->dml2_options.max_segments_per_hubp = 18;
+	dc->dml2_options.det_segment_size = DCN3_2_DET_SEG_SIZE;
+	dc->dml2_options.map_dc_pipes_with_callbacks = true;
+
+	if (ASICREV_IS_GC_11_0_3(dc->ctx->asic_id.hw_internal_rev) && (dc->config.sdpif_request_limit_words_per_umc == 0))
+		dc->config.sdpif_request_limit_words_per_umc = 16;
 
 	DC_FP_END();
 
@@ -2374,6 +2516,85 @@ struct resource_pool *dcn32_create_resource_pool(
 	BREAK_TO_DEBUGGER();
 	kfree(pool);
 	return NULL;
+}
+
+/*
+ * Find the most optimal free pipe from res_ctx, which could be used as a
+ * secondary dpp pipe for input opp head pipe.
+ *
+ * a free pipe - a pipe in input res_ctx not yet used for any streams or
+ * planes.
+ * secondary dpp pipe - a pipe gets inserted to a head OPP pipe's MPC blending
+ * tree. This is typical used for rendering MPO planes or additional offset
+ * areas in MPCC combine.
+ *
+ * Hardware Transition Minimization Algorithm for Finding a Secondary DPP Pipe
+ * -------------------------------------------------------------------------
+ *
+ * PROBLEM:
+ *
+ * 1. There is a hardware limitation that a secondary DPP pipe cannot be
+ * transferred from one MPC blending tree to the other in a single frame.
+ * Otherwise it could cause glitches on the screen.
+ *
+ * For instance, we cannot transition from state 1 to state 2 in one frame. This
+ * is because PIPE1 is transferred from PIPE0's MPC blending tree over to
+ * PIPE2's MPC blending tree, which is not supported by hardware.
+ * To support this transition we need to first remove PIPE1 from PIPE0's MPC
+ * blending tree in one frame and then insert PIPE1 to PIPE2's MPC blending tree
+ * in the next frame. This is not optimal as it will delay the flip for two
+ * frames.
+ *
+ *	State 1:
+ *	PIPE0 -- secondary DPP pipe --> (PIPE1)
+ *	PIPE2 -- secondary DPP pipe --> NONE
+ *
+ *	State 2:
+ *	PIPE0 -- secondary DPP pipe --> NONE
+ *	PIPE2 -- secondary DPP pipe --> (PIPE1)
+ *
+ * 2. We want to in general minimize the unnecessary changes in pipe topology.
+ * If a pipe is already added in current blending tree and there are no changes
+ * to plane topology, we don't want to swap it with another free pipe
+ * unnecessarily in every update. Powering up and down a pipe would require a
+ * full update which delays the flip for 1 frame. If we use the original pipe
+ * we don't have to toggle its power. So we can flip faster.
+ */
+static int find_optimal_free_pipe_as_secondary_dpp_pipe(
+		const struct resource_context *cur_res_ctx,
+		struct resource_context *new_res_ctx,
+		const struct resource_pool *pool,
+		const struct pipe_ctx *new_opp_head)
+{
+	const struct pipe_ctx *cur_opp_head;
+	int free_pipe_idx;
+
+	cur_opp_head = &cur_res_ctx->pipe_ctx[new_opp_head->pipe_idx];
+	free_pipe_idx = resource_find_free_pipe_used_in_cur_mpc_blending_tree(
+			cur_res_ctx, new_res_ctx, cur_opp_head);
+
+	/* Up until here if we have not found a free secondary pipe, we will
+	 * need to wait for at least one frame to complete the transition
+	 * sequence.
+	 */
+	if (free_pipe_idx == FREE_PIPE_INDEX_NOT_FOUND)
+		free_pipe_idx = recource_find_free_pipe_not_used_in_cur_res_ctx(
+				cur_res_ctx, new_res_ctx, pool);
+
+	/* Up until here if we have not found a free secondary pipe, we will
+	 * need to wait for at least two frames to complete the transition
+	 * sequence. It really doesn't matter which pipe we decide take from
+	 * current enabled pipes. It won't save our frame time when we swap only
+	 * one pipe or more pipes.
+	 */
+	if (free_pipe_idx == FREE_PIPE_INDEX_NOT_FOUND)
+		free_pipe_idx = resource_find_free_pipe_used_as_cur_sec_dpp_in_mpcc_combine(
+				cur_res_ctx, new_res_ctx, pool);
+
+	if (free_pipe_idx == FREE_PIPE_INDEX_NOT_FOUND)
+		free_pipe_idx = resource_find_any_free_pipe(new_res_ctx, pool);
+
+	return free_pipe_idx;
 }
 
 static struct pipe_ctx *find_idle_secondary_pipe_check_mpo(
@@ -2438,11 +2659,11 @@ static struct pipe_ctx *find_idle_secondary_pipe_check_mpo(
 	return secondary_pipe;
 }
 
-struct pipe_ctx *dcn32_acquire_idle_pipe_for_head_pipe_in_layer(
+static struct pipe_ctx *dcn32_acquire_idle_pipe_for_head_pipe_in_layer(
 		struct dc_state *state,
 		const struct resource_pool *pool,
 		struct dc_stream_state *stream,
-		struct pipe_ctx *head_pipe)
+		const struct pipe_ctx *head_pipe)
 {
 	struct resource_context *res_ctx = &state->res_ctx;
 	struct pipe_ctx *idle_pipe, *pipe;
@@ -2479,4 +2700,163 @@ struct pipe_ctx *dcn32_acquire_idle_pipe_for_head_pipe_in_layer(
 	idle_pipe->plane_res.mpcc_inst = pool->dpps[idle_pipe->pipe_idx]->inst;
 
 	return idle_pipe;
+}
+
+static int find_optimal_free_pipe_as_secondary_opp_head(
+		const struct resource_context *cur_res_ctx,
+		struct resource_context *new_res_ctx,
+		const struct resource_pool *pool,
+		const struct pipe_ctx *new_otg_master)
+{
+	const struct pipe_ctx *cur_otg_master;
+	int free_pipe_idx;
+
+	cur_otg_master =  &cur_res_ctx->pipe_ctx[new_otg_master->pipe_idx];
+	free_pipe_idx = resource_find_free_pipe_used_as_sec_opp_head_by_cur_otg_master(
+			cur_res_ctx, new_res_ctx, cur_otg_master);
+
+	/* Up until here if we have not found a free secondary pipe, we will
+	 * need to wait for at least one frame to complete the transition
+	 * sequence.
+	 */
+	if (free_pipe_idx == FREE_PIPE_INDEX_NOT_FOUND)
+		free_pipe_idx = recource_find_free_pipe_not_used_in_cur_res_ctx(
+				cur_res_ctx, new_res_ctx, pool);
+
+	if (free_pipe_idx == FREE_PIPE_INDEX_NOT_FOUND)
+		free_pipe_idx = resource_find_any_free_pipe(new_res_ctx, pool);
+
+	return free_pipe_idx;
+}
+
+struct pipe_ctx *dcn32_acquire_free_pipe_as_secondary_dpp_pipe(
+		const struct dc_state *cur_ctx,
+		struct dc_state *new_ctx,
+		const struct resource_pool *pool,
+		const struct pipe_ctx *opp_head_pipe)
+{
+
+	int free_pipe_idx;
+	struct pipe_ctx *free_pipe;
+
+	if (!opp_head_pipe->stream->ctx->dc->config.enable_windowed_mpo_odm)
+		return dcn32_acquire_idle_pipe_for_head_pipe_in_layer(
+				new_ctx, pool, opp_head_pipe->stream, opp_head_pipe);
+
+	free_pipe_idx = find_optimal_free_pipe_as_secondary_dpp_pipe(
+					&cur_ctx->res_ctx, &new_ctx->res_ctx,
+					pool, opp_head_pipe);
+	if (free_pipe_idx >= 0) {
+		free_pipe = &new_ctx->res_ctx.pipe_ctx[free_pipe_idx];
+		free_pipe->pipe_idx = free_pipe_idx;
+		free_pipe->stream = opp_head_pipe->stream;
+		free_pipe->stream_res.tg = opp_head_pipe->stream_res.tg;
+		free_pipe->stream_res.opp = opp_head_pipe->stream_res.opp;
+
+		free_pipe->plane_res.hubp = pool->hubps[free_pipe->pipe_idx];
+		free_pipe->plane_res.ipp = pool->ipps[free_pipe->pipe_idx];
+		free_pipe->plane_res.dpp = pool->dpps[free_pipe->pipe_idx];
+		free_pipe->plane_res.mpcc_inst =
+				pool->dpps[free_pipe->pipe_idx]->inst;
+	} else {
+		ASSERT(opp_head_pipe);
+		free_pipe = NULL;
+	}
+
+	return free_pipe;
+}
+
+struct pipe_ctx *dcn32_acquire_free_pipe_as_secondary_opp_head(
+		const struct dc_state *cur_ctx,
+		struct dc_state *new_ctx,
+		const struct resource_pool *pool,
+		const struct pipe_ctx *otg_master)
+{
+	int free_pipe_idx = find_optimal_free_pipe_as_secondary_opp_head(
+			&cur_ctx->res_ctx, &new_ctx->res_ctx,
+			pool, otg_master);
+	struct pipe_ctx *free_pipe;
+
+	if (free_pipe_idx >= 0) {
+		free_pipe = &new_ctx->res_ctx.pipe_ctx[free_pipe_idx];
+		free_pipe->pipe_idx = free_pipe_idx;
+		free_pipe->stream = otg_master->stream;
+		free_pipe->stream_res.tg = otg_master->stream_res.tg;
+		free_pipe->stream_res.dsc = NULL;
+		free_pipe->stream_res.opp = pool->opps[free_pipe_idx];
+		free_pipe->plane_res.mi = pool->mis[free_pipe_idx];
+		free_pipe->plane_res.hubp = pool->hubps[free_pipe_idx];
+		free_pipe->plane_res.ipp = pool->ipps[free_pipe_idx];
+		free_pipe->plane_res.xfm = pool->transforms[free_pipe_idx];
+		free_pipe->plane_res.dpp = pool->dpps[free_pipe_idx];
+		free_pipe->plane_res.mpcc_inst = pool->dpps[free_pipe_idx]->inst;
+		if (free_pipe->stream->timing.flags.DSC == 1) {
+			dcn20_acquire_dsc(free_pipe->stream->ctx->dc,
+					&new_ctx->res_ctx,
+					&free_pipe->stream_res.dsc,
+					free_pipe_idx);
+			ASSERT(free_pipe->stream_res.dsc);
+			if (free_pipe->stream_res.dsc == NULL) {
+				memset(free_pipe, 0, sizeof(*free_pipe));
+				free_pipe = NULL;
+			}
+		}
+	} else {
+		ASSERT(otg_master);
+		free_pipe = NULL;
+	}
+
+	return free_pipe;
+}
+
+unsigned int dcn32_calc_num_avail_chans_for_mall(struct dc *dc, int num_chans)
+{
+	/*
+	 * DCN32 and DCN321 SKUs may have different sizes for MALL
+	 *  but we may not be able to access all the MALL space.
+	 *  If the num_chans is power of 2, then we can access all
+	 *  of the available MALL space.  Otherwise, we can only
+	 *  access:
+	 *
+	 *  max_cab_size_in_bytes = total_cache_size_in_bytes *
+	 *    ((2^floor(log2(num_chans)))/num_chans)
+	 *
+	 * Calculating the MALL sizes for all available SKUs, we
+	 *  have come up with the follow simplified check.
+	 * - we have max_chans which provides the max MALL size.
+	 *  Each chans supports 4MB of MALL so:
+	 *
+	 *  total_cache_size_in_bytes = max_chans * 4 MB
+	 *
+	 * - we have avail_chans which shows the number of channels
+	 *  we can use if we can't access the entire MALL space.
+	 *  It is generally half of max_chans
+	 * - so we use the following checks:
+	 *
+	 *   if (num_chans == max_chans), return max_chans
+	 *   if (num_chans < max_chans), return avail_chans
+	 *
+	 * - exception is GC_11_0_0 where we can't access max_chans,
+	 *  so we define max_avail_chans as the maximum available
+	 *  MALL space
+	 *
+	 */
+	int gc_11_0_0_max_chans = 48;
+	int gc_11_0_0_max_avail_chans = 32;
+	int gc_11_0_0_avail_chans = 16;
+	int gc_11_0_3_max_chans = 16;
+	int gc_11_0_3_avail_chans = 8;
+	int gc_11_0_2_max_chans = 8;
+	int gc_11_0_2_avail_chans = 4;
+
+	if (ASICREV_IS_GC_11_0_0(dc->ctx->asic_id.hw_internal_rev)) {
+		return (num_chans == gc_11_0_0_max_chans) ?
+			gc_11_0_0_max_avail_chans : gc_11_0_0_avail_chans;
+	} else if (ASICREV_IS_GC_11_0_2(dc->ctx->asic_id.hw_internal_rev)) {
+		return (num_chans == gc_11_0_2_max_chans) ?
+			gc_11_0_2_max_chans : gc_11_0_2_avail_chans;
+	} else { // if (ASICREV_IS_GC_11_0_3(dc->ctx->asic_id.hw_internal_rev)) {
+		return (num_chans == gc_11_0_3_max_chans) ?
+			gc_11_0_3_max_chans : gc_11_0_3_avail_chans;
+	}
 }

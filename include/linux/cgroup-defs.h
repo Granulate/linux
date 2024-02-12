@@ -115,6 +115,11 @@ enum {
 	 * Enable recursive subtree protection
 	 */
 	CGRP_ROOT_MEMORY_RECURSIVE_PROT = (1 << 18),
+
+	/*
+	 * Enable hugetlb accounting for the memory controller.
+	 */
+	 CGRP_ROOT_MEMORY_HUGETLB_ACCOUNTING = (1 << 19),
 };
 
 /* cftype->flags */
@@ -126,11 +131,11 @@ enum {
 	CFTYPE_NO_PREFIX	= (1 << 3),	/* (DON'T USE FOR NEW FILES) no subsys prefix */
 	CFTYPE_WORLD_WRITABLE	= (1 << 4),	/* (DON'T USE FOR NEW FILES) S_IWUGO */
 	CFTYPE_DEBUG		= (1 << 5),	/* create when cgroup_debug */
-	CFTYPE_PRESSURE		= (1 << 6),	/* only if pressure feature is enabled */
 
 	/* internal flags, do not use outside cgroup core proper */
 	__CFTYPE_ONLY_ON_DFL	= (1 << 16),	/* only on default hierarchy */
 	__CFTYPE_NOT_ON_DFL	= (1 << 17),	/* not on default hierarchy */
+	__CFTYPE_ADDED		= (1 << 18),
 };
 
 /*
@@ -238,7 +243,7 @@ struct css_set {
 	 * Lists running through all tasks using this cgroup group.
 	 * mg_tasks lists tasks which belong to this cset but are in the
 	 * process of being migrated out or in.  Protected by
-	 * css_set_rwsem, but, during migration, once tasks are moved to
+	 * css_set_lock, but, during migration, once tasks are moved to
 	 * mg_tasks, it can be read safely while holding cgroup_mutex.
 	 */
 	struct list_head tasks;
@@ -342,6 +347,20 @@ struct cgroup_rstat_cpu {
 	struct cgroup_base_stat last_bstat;
 
 	/*
+	 * This field is used to record the cumulative per-cpu time of
+	 * the cgroup and its descendants. Currently it can be read via
+	 * eBPF/drgn etc, and we are still trying to determine how to
+	 * expose it in the cgroupfs interface.
+	 */
+	struct cgroup_base_stat subtree_bstat;
+
+	/*
+	 * Snapshots at the last reading. These are used to calculate the
+	 * deltas to propagate to the per-cpu subtree_bstat.
+	 */
+	struct cgroup_base_stat last_subtree_bstat;
+
+	/*
 	 * Child cgroups with stat updates on this cpu since the last read
 	 * are linked on the parent's ->updated_children through
 	 * ->updated_next.
@@ -384,7 +403,7 @@ struct cgroup {
 	/*
 	 * The depth this cgroup is at.  The root is at depth zero and each
 	 * step down the hierarchy increments the level.  This along with
-	 * ancestor_ids[] can determine whether a given cgroup is a
+	 * ancestors[] can determine whether a given cgroup is a
 	 * descendant of another without traversing the hierarchy.
 	 */
 	int level;
@@ -427,6 +446,9 @@ struct cgroup {
 	struct kernfs_node *kn;		/* cgroup kernfs entry */
 	struct cgroup_file procs_file;	/* handle for "cgroup.procs" */
 	struct cgroup_file events_file;	/* handle for "cgroup.events" */
+
+	/* handles for "{cpu,memory,io,irq}.pressure" */
+	struct cgroup_file psi_files[NR_PSI_RESOURCES];
 
 	/*
 	 * The bitmask of subsystems enabled on the child cgroups.
@@ -504,8 +526,12 @@ struct cgroup {
 	/* Used to store internal freezer state */
 	struct cgroup_freezer_state freezer;
 
-	/* ids of the ancestors at each level including self */
-	u64 ancestor_ids[];
+#ifdef CONFIG_BPF_SYSCALL
+	struct bpf_local_storage __rcu  *bpf_cgrp_storage;
+#endif
+
+	/* All ancestors including self */
+	struct cgroup *ancestors[];
 };
 
 /*
@@ -522,11 +548,15 @@ struct cgroup_root {
 	/* Unique id for this hierarchy. */
 	int hierarchy_id;
 
-	/* The root cgroup.  Root is destroyed on its release. */
+	/*
+	 * The root cgroup. The containing cgroup_root will be destroyed on its
+	 * release. cgrp->ancestors[0] will be used overflowing into the
+	 * following field. cgrp_ancestor_storage must immediately follow.
+	 */
 	struct cgroup cgrp;
 
-	/* for cgrp->ancestor_ids[0] */
-	u64 cgrp_ancestor_id_storage;
+	/* must follow cgrp for cgrp->ancestors[0], see above */
+	struct cgroup *cgrp_ancestor_storage;
 
 	/* Number of cgroups in the hierarchy, used only for /proc/cgroups */
 	atomic_t nr_cgrps;
@@ -649,6 +679,8 @@ struct cgroup_subsys {
 	void (*css_reset)(struct cgroup_subsys_state *css);
 	void (*css_rstat_flush)(struct cgroup_subsys_state *css, int cpu);
 	int (*css_extra_stat_show)(struct seq_file *seq,
+				   struct cgroup_subsys_state *css);
+	int (*css_local_stat_show)(struct seq_file *seq,
 				   struct cgroup_subsys_state *css);
 
 	int (*can_attach)(struct cgroup_taskset *tset);

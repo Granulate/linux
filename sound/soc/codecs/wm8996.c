@@ -2610,7 +2610,7 @@ static const struct regmap_config wm8996_regmap = {
 	.num_reg_defaults = ARRAY_SIZE(wm8996_reg),
 	.volatile_reg = wm8996_volatile_register,
 	.readable_reg = wm8996_readable_register,
-	.cache_type = REGCACHE_RBTREE,
+	.cache_type = REGCACHE_MAPLE,
 };
 
 static int wm8996_probe(struct snd_soc_component *component)
@@ -3065,7 +3065,7 @@ err:
 	return ret;
 }
 
-static int wm8996_i2c_remove(struct i2c_client *client)
+static void wm8996_i2c_remove(struct i2c_client *client)
 {
 	struct wm8996_priv *wm8996 = i2c_get_clientdata(client);
 
@@ -3074,8 +3074,6 @@ static int wm8996_i2c_remove(struct i2c_client *client)
 		gpio_set_value_cansleep(wm8996->pdata.ldo_ena, 0);
 		gpio_free(wm8996->pdata.ldo_ena);
 	}
-
-	return 0;
 }
 
 static const struct i2c_device_id wm8996_i2c_id[] = {
@@ -3088,7 +3086,7 @@ static struct i2c_driver wm8996_i2c_driver = {
 	.driver = {
 		.name = "wm8996",
 	},
-	.probe_new = wm8996_i2c_probe,
+	.probe =    wm8996_i2c_probe,
 	.remove =   wm8996_i2c_remove,
 	.id_table = wm8996_i2c_id,
 };

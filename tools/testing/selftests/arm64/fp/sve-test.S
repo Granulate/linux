@@ -314,6 +314,15 @@ function irritator_handler
 	ret
 endfunction
 
+function tickle_handler
+	// Increment the signal count (x23):
+	ldr	x0, [x2, #ucontext_regs + 8 * 23]
+	add	x0, x0, #1
+	str	x0, [x2, #ucontext_regs + 8 * 23]
+
+	ret
+endfunction
+
 function terminate_handler
 	mov	w21, w0
 	mov	x20, x2
@@ -369,7 +378,30 @@ endfunction
 // Main program entry point
 .globl _start
 function _start
-_start:
+	mov	x23, #0		// Irritation signal count
+
+	mov	w0, #SIGINT
+	adr	x1, terminate_handler
+	mov	w2, #SA_SIGINFO
+	bl	setsignal
+
+	mov	w0, #SIGTERM
+	adr	x1, terminate_handler
+	mov	w2, #SA_SIGINFO
+	bl	setsignal
+
+	mov	w0, #SIGUSR1
+	adr	x1, irritator_handler
+	mov	w2, #SA_SIGINFO
+	orr	w2, w2, #SA_NODEFER
+	bl	setsignal
+
+	mov	w0, #SIGUSR2
+	adr	x1, tickle_handler
+	mov	w2, #SA_SIGINFO
+	orr	w2, w2, #SA_NODEFER
+	bl	setsignal
+
 #ifdef SSVE
 	puts	"Streaming mode "
 	smstart_sm
@@ -404,24 +436,6 @@ _start:
 	puts	"PID:\t"
 	mov	x0, x20
 	bl	putdecn
-
-	mov	x23, #0		// Irritation signal count
-
-	mov	w0, #SIGINT
-	adr	x1, terminate_handler
-	mov	w2, #SA_SIGINFO
-	bl	setsignal
-
-	mov	w0, #SIGTERM
-	adr	x1, terminate_handler
-	mov	w2, #SA_SIGINFO
-	bl	setsignal
-
-	mov	w0, #SIGUSR1
-	adr	x1, irritator_handler
-	mov	w2, #SA_SIGINFO
-	orr	w2, w2, #SA_NODEFER
-	bl	setsignal
 
 #ifdef SSVE
 	smstart_sm		// syscalls will have exited streaming mode
@@ -458,6 +472,13 @@ _start:
 // Can't do this when SVE state is volatile across SVC:
 //	mov	x8, #__NR_sched_yield	// Encourage preemption
 //	svc	#0
+
+#ifdef SSVE
+	mrs	x0, S3_3_C4_C2_2	// SVCR should have ZA=0,SM=1
+	and	x1, x0, #3
+	cmp	x1, #1
+	b.ne	svcr_barf
+#endif
 
 	mov	x21, #0
 0:	mov	x0, x21
@@ -532,6 +553,18 @@ function vl_barf
 	mov	x10, x0
 
 	puts	"Bad active VL: "
+	mov	x0, x10
+	bl	putdecn
+
+	mov	x8, #__NR_exit
+	mov	x1, #1
+	svc	#0
+endfunction
+
+function svcr_barf
+	mov	x10, x0
+
+	puts	"Bad SVCR: "
 	mov	x0, x10
 	bl	putdecn
 

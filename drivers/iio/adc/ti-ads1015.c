@@ -974,8 +974,7 @@ static int ads1015_set_conv_mode(struct ads1015_data *data, int mode)
 				  mode << ADS1015_CFG_MOD_SHIFT);
 }
 
-static int ads1015_probe(struct i2c_client *client,
-			 const struct i2c_device_id *id)
+static int ads1015_probe(struct i2c_client *client)
 {
 	const struct ads1015_chip_data *chip;
 	struct iio_dev *indio_dev;
@@ -983,9 +982,7 @@ static int ads1015_probe(struct i2c_client *client,
 	int ret;
 	int i;
 
-	chip = device_get_match_data(&client->dev);
-	if (!chip)
-		chip = (const struct ads1015_chip_data *)id->driver_data;
+	chip = i2c_get_match_data(client);
 	if (!chip)
 		return dev_err_probe(&client->dev, -EINVAL, "Unknown chip\n");
 
@@ -1047,11 +1044,13 @@ static int ads1015_probe(struct i2c_client *client,
 			1 << ADS1015_CFG_COMP_LAT_SHIFT;
 
 		switch (irq_trig) {
+		case IRQF_TRIGGER_FALLING:
 		case IRQF_TRIGGER_LOW:
 			cfg_comp |= ADS1015_CFG_COMP_POL_LOW <<
 					ADS1015_CFG_COMP_POL_SHIFT;
 			break;
 		case IRQF_TRIGGER_HIGH:
+		case IRQF_TRIGGER_RISING:
 			cfg_comp |= ADS1015_CFG_COMP_POL_HIGH <<
 					ADS1015_CFG_COMP_POL_SHIFT;
 			break;
@@ -1094,7 +1093,7 @@ static int ads1015_probe(struct i2c_client *client,
 	return 0;
 }
 
-static int ads1015_remove(struct i2c_client *client)
+static void ads1015_remove(struct i2c_client *client)
 {
 	struct iio_dev *indio_dev = i2c_get_clientdata(client);
 	struct ads1015_data *data = iio_priv(indio_dev);
@@ -1110,8 +1109,6 @@ static int ads1015_remove(struct i2c_client *client)
 	if (ret)
 		dev_warn(&client->dev, "Failed to power down (%pe)\n",
 			 ERR_PTR(ret));
-
-	return 0;
 }
 
 #ifdef CONFIG_PM

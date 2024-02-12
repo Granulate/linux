@@ -355,7 +355,8 @@ static u32 san_evt_bat_nf(struct ssam_event_notifier *nf,
 	INIT_DELAYED_WORK(&work->work, san_evt_bat_workfn);
 	work->dev = d->dev;
 
-	memcpy(&work->event, event, sizeof(struct ssam_event) + event->length);
+	work->event = *event;
+	memcpy(work->event.data, event->data, event->length);
 
 	queue_delayed_work(san_wq, &work->work, delay);
 	return SSAM_NOTIF_HANDLED;
@@ -589,7 +590,7 @@ static acpi_status san_rqst(struct san_data *d, struct gsb_buffer *buffer)
 		return san_rqst_fixup_suspended(d, &rqst, buffer);
 	}
 
-	status = __ssam_retry(ssam_request_sync_onstack, SAN_REQUEST_NUM_TRIES,
+	status = __ssam_retry(ssam_request_do_sync_onstack, SAN_REQUEST_NUM_TRIES,
 			      d->ctrl, &rqst, &rsp, SAN_GSB_MAX_RQSX_PAYLOAD);
 
 	if (!status) {
@@ -740,6 +741,7 @@ static bool is_san_consumer(struct platform_device *pdev, acpi_handle handle)
 	struct acpi_handle_list dep_devices;
 	acpi_handle supplier = ACPI_HANDLE(&pdev->dev);
 	acpi_status status;
+	bool ret = false;
 	int i;
 
 	if (!acpi_has_method(handle, "_DEP"))
@@ -752,11 +754,14 @@ static bool is_san_consumer(struct platform_device *pdev, acpi_handle handle)
 	}
 
 	for (i = 0; i < dep_devices.count; i++) {
-		if (dep_devices.handles[i] == supplier)
-			return true;
+		if (dep_devices.handles[i] == supplier) {
+			ret = true;
+			break;
+		}
 	}
 
-	return false;
+	acpi_handle_list_free(&dep_devices);
+	return ret;
 }
 
 static acpi_status san_consumer_setup(acpi_handle handle, u32 lvl,
@@ -849,7 +854,7 @@ err_enable_events:
 	return status;
 }
 
-static int san_remove(struct platform_device *pdev)
+static void san_remove(struct platform_device *pdev)
 {
 	acpi_handle san = ACPI_HANDLE(&pdev->dev);
 
@@ -863,8 +868,6 @@ static int san_remove(struct platform_device *pdev)
 	 * all delayed works they may have spawned are run to completion.
 	 */
 	flush_workqueue(san_wq);
-
-	return 0;
 }
 
 static const struct acpi_device_id san_match[] = {
@@ -875,7 +878,7 @@ MODULE_DEVICE_TABLE(acpi, san_match);
 
 static struct platform_driver surface_acpi_notify = {
 	.probe = san_probe,
-	.remove = san_remove,
+	.remove_new = san_remove,
 	.driver = {
 		.name = "surface_acpi_notify",
 		.acpi_match_table = san_match,

@@ -56,33 +56,17 @@ struct resource_constraint {
 
 static DEFINE_RWLOCK(resource_lock);
 
-static struct resource *next_resource(struct resource *p)
+static struct resource *next_resource(struct resource *p, bool skip_children)
 {
-	if (p->child)
+	if (!skip_children && p->child)
 		return p->child;
 	while (!p->sibling && p->parent)
 		p = p->parent;
 	return p->sibling;
 }
 
-static struct resource *next_resource_skip_children(struct resource *p)
-{
-	while (!p->sibling && p->parent)
-		p = p->parent;
-	return p->sibling;
-}
-
 #define for_each_resource(_root, _p, _skip_children) \
-	for ((_p) = (_root)->child; (_p); \
-	     (_p) = (_skip_children) ? next_resource_skip_children(_p) : \
-				       next_resource(_p))
-
-static void *r_next(struct seq_file *m, void *v, loff_t *pos)
-{
-	struct resource *p = v;
-	(*pos)++;
-	return (void *)next_resource(p);
-}
+	for ((_p) = (_root)->child; (_p); (_p) = next_resource(_p, _skip_children))
 
 #ifdef CONFIG_PROC_FS
 
@@ -91,12 +75,26 @@ enum { MAX_IORES_LEVEL = 5 };
 static void *r_start(struct seq_file *m, loff_t *pos)
 	__acquires(resource_lock)
 {
-	struct resource *p = pde_data(file_inode(m->file));
-	loff_t l = 0;
+	struct resource *root = pde_data(file_inode(m->file));
+	struct resource *p;
+	loff_t l = *pos;
+
 	read_lock(&resource_lock);
-	for (p = p->child; p && l < *pos; p = r_next(m, p, &l))
-		;
+	for_each_resource(root, p, false) {
+		if (l-- == 0)
+			break;
+	}
+
 	return p;
+}
+
+static void *r_next(struct seq_file *m, void *v, loff_t *pos)
+{
+	struct resource *p = v;
+
+	(*pos)++;
+
+	return (void *)next_resource(p, false);
 }
 
 static void r_stop(struct seq_file *m, void *v)
@@ -336,7 +334,7 @@ static int find_next_iomem_res(resource_size_t start, resource_size_t end,
 
 	read_lock(&resource_lock);
 
-	for (p = iomem_resource.child; p; p = next_resource(p)) {
+	for_each_resource(&iomem_resource, p, false) {
 		/* If we passed the resource we are looking for, stop */
 		if (p->start > end) {
 			p = NULL;
@@ -888,7 +886,7 @@ void insert_resource_expand_to_fit(struct resource *root, struct resource *new)
 		if (conflict->end > new->end)
 			new->end = conflict->end;
 
-		printk("Expanded resource %s due to conflict with %s\n", new->name, conflict->name);
+		pr_info("Expanded resource %s due to conflict with %s\n", new->name, conflict->name);
 	}
 	write_unlock(&resource_lock);
 }
@@ -1283,9 +1281,7 @@ void __release_region(struct resource *parent, resource_size_t start,
 
 	write_unlock(&resource_lock);
 
-	printk(KERN_WARNING "Trying to free nonexistent resource "
-		"<%016llx-%016llx>\n", (unsigned long long)start,
-		(unsigned long long)end);
+	pr_warn("Trying to free nonexistent resource <%pa-%pa>\n", &start, &end);
 }
 EXPORT_SYMBOL(__release_region);
 
@@ -1343,20 +1339,6 @@ retry:
 		if (res->start > start || res->end < end) {
 			p = &res->sibling;
 			continue;
-		}
-
-		/*
-		 * All memory regions added from memory-hotplug path have the
-		 * flag IORESOURCE_SYSTEM_RAM. If the resource does not have
-		 * this flag, we know that we are dealing with a resource coming
-		 * from HMM/devm. HMM/devm use another mechanism to add/release
-		 * a resource. This goes via devm_request_mem_region and
-		 * devm_release_mem_region.
-		 * HMM/devm take care to release their resources when they want,
-		 * so if we are dealing with them, let us just back off here.
-		 */
-		if (!(res->flags & IORESOURCE_SYSRAM)) {
-			break;
 		}
 
 		if (!(res->flags & IORESOURCE_MEM))
@@ -1657,22 +1639,22 @@ __setup("reserve=", reserve_setup);
  */
 int iomem_map_sanity_check(resource_size_t addr, unsigned long size)
 {
-	struct resource *p = &iomem_resource;
+	resource_size_t end = addr + size - 1;
+	struct resource *p;
 	int err = 0;
-	loff_t l;
 
 	read_lock(&resource_lock);
-	for (p = p->child; p ; p = r_next(NULL, p, &l)) {
+	for_each_resource(&iomem_resource, p, false) {
 		/*
 		 * We can probably skip the resources without
 		 * IORESOURCE_IO attribute?
 		 */
-		if (p->start >= addr + size)
+		if (p->start > end)
 			continue;
 		if (p->end < addr)
 			continue;
 		if (PFN_DOWN(p->start) <= PFN_DOWN(addr) &&
-		    PFN_DOWN(p->end) >= PFN_DOWN(addr + size - 1))
+		    PFN_DOWN(p->end) >= PFN_DOWN(end))
 			continue;
 		/*
 		 * if a resource is "BUSY", it's not a hardware resource
@@ -1683,10 +1665,8 @@ int iomem_map_sanity_check(resource_size_t addr, unsigned long size)
 		if (p->flags & IORESOURCE_BUSY)
 			continue;
 
-		printk(KERN_WARNING "resource sanity check: requesting [mem %#010llx-%#010llx], which spans more than %s %pR\n",
-		       (unsigned long long)addr,
-		       (unsigned long long)(addr + size - 1),
-		       p->name, p);
+		pr_warn("resource sanity check: requesting [mem %pa-%pa], which spans more than %s %pR\n",
+			&addr, &end, p->name, p);
 		err = -1;
 		break;
 	}
@@ -1707,18 +1687,15 @@ static int strict_iomem_checks;
  *
  * Returns true if exclusive to the kernel, otherwise returns false.
  */
-bool iomem_is_exclusive(u64 addr)
+bool resource_is_exclusive(struct resource *root, u64 addr, resource_size_t size)
 {
 	const unsigned int exclusive_system_ram = IORESOURCE_SYSTEM_RAM |
 						  IORESOURCE_EXCLUSIVE;
 	bool skip_children = false, err = false;
-	int size = PAGE_SIZE;
 	struct resource *p;
 
-	addr = addr & PAGE_MASK;
-
 	read_lock(&resource_lock);
-	for_each_resource(&iomem_resource, p, skip_children) {
+	for_each_resource(root, p, skip_children) {
 		if (p->start >= addr + size)
 			break;
 		if (p->end < addr) {
@@ -1755,6 +1732,12 @@ bool iomem_is_exclusive(u64 addr)
 	read_unlock(&resource_lock);
 
 	return err;
+}
+
+bool iomem_is_exclusive(u64 addr)
+{
+	return resource_is_exclusive(&iomem_resource, addr & PAGE_MASK,
+				     PAGE_SIZE);
 }
 
 struct resource_entry *resource_list_create_entry(struct resource *res,
@@ -1861,8 +1844,8 @@ get_free_mem_region(struct device *dev, struct resource *base,
 
 	write_lock(&resource_lock);
 	for (addr = gfr_start(base, size, align, flags);
-	     gfr_continue(base, addr, size, flags);
-	     addr = gfr_next(addr, size, flags)) {
+	     gfr_continue(base, addr, align, flags);
+	     addr = gfr_next(addr, align, flags)) {
 		if (__region_intersects(base, addr, size, 0, IORES_DESC_NONE) !=
 		    REGION_DISJOINT)
 			continue;

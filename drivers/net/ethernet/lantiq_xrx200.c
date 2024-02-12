@@ -620,8 +620,7 @@ static int xrx200_probe(struct platform_device *pdev)
 			 PMAC_HD_CTL);
 
 	/* setup NAPI */
-	netif_napi_add(net_dev, &priv->chan_rx.napi, xrx200_poll_rx,
-		       NAPI_POLL_WEIGHT);
+	netif_napi_add(net_dev, &priv->chan_rx.napi, xrx200_poll_rx);
 	netif_napi_add_tx(net_dev, &priv->chan_tx.napi,
 			  xrx200_tx_housekeeping);
 
@@ -642,7 +641,7 @@ err_uninit_dma:
 	return err;
 }
 
-static int xrx200_remove(struct platform_device *pdev)
+static void xrx200_remove(struct platform_device *pdev)
 {
 	struct xrx200_priv *priv = platform_get_drvdata(pdev);
 	struct net_device *net_dev = priv->net_dev;
@@ -660,8 +659,6 @@ static int xrx200_remove(struct platform_device *pdev)
 
 	/* shut down hardware */
 	xrx200_hw_cleanup(priv);
-
-	return 0;
 }
 
 static const struct of_device_id xrx200_match[] = {
@@ -672,7 +669,7 @@ MODULE_DEVICE_TABLE(of, xrx200_match);
 
 static struct platform_driver xrx200_driver = {
 	.probe = xrx200_probe,
-	.remove = xrx200_remove,
+	.remove_new = xrx200_remove,
 	.driver = {
 		.name = "lantiq,xrx200-net",
 		.of_match_table = xrx200_match,

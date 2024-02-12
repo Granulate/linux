@@ -46,7 +46,7 @@ driver model device node, and its I2C address.
 	},
 
 	.id_table	= foo_idtable,
-	.probe_new	= foo_probe,
+	.probe		= foo_probe,
 	.remove		= foo_remove,
 	/* if device autodetection is needed: */
 	.class		= I2C_CLASS_SOMETHING,
@@ -156,7 +156,7 @@ those devices, and a remove() method to unbind.
 ::
 
 	static int foo_probe(struct i2c_client *client);
-	static int foo_remove(struct i2c_client *client);
+	static void foo_remove(struct i2c_client *client);
 
 Remember that the i2c_driver does not create those client handles.  The
 handle may be used during foo_probe().  If foo_probe() reports success

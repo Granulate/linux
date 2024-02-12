@@ -10,6 +10,7 @@
 #include <linux/module.h>
 #include <linux/property.h>
 #include <linux/regmap.h>
+#include <linux/units.h>
 
 #include <linux/iio/iio.h>
 #include <linux/iio/sysfs.h>
@@ -32,7 +33,6 @@
 
 #define ADXL345_BW_RATE			GENMASK(3, 0)
 #define ADXL345_BASE_RATE_NANO_HZ	97656250LL
-#define NHZ_PER_HZ			1000000000LL
 
 #define ADXL345_POWER_CTL_MEASURE	BIT(3)
 #define ADXL345_POWER_CTL_STANDBY	0x00
@@ -45,25 +45,10 @@
 
 #define ADXL345_DEVID			0xE5
 
-/*
- * In full-resolution mode, scale factor is maintained at ~4 mg/LSB
- * in all g ranges.
- *
- * At +/- 16g with 13-bit resolution, scale is computed as:
- * (16 + 16) * 9.81 / (2^13 - 1) = 0.0383
- */
-static const int adxl345_uscale = 38300;
-
-/*
- * The Datasheet lists a resolution of Resolution is ~49 mg per LSB. That's
- * ~480mm/s**2 per LSB.
- */
-static const int adxl375_uscale = 480000;
-
 struct adxl345_data {
+	const struct adxl345_chip_info *info;
 	struct regmap *regmap;
 	u8 data_range;
-	enum adxl345_device_type type;
 };
 
 #define ADXL345_CHANNEL(index, axis) {					\
@@ -110,15 +95,7 @@ static int adxl345_read_raw(struct iio_dev *indio_dev,
 		return IIO_VAL_INT;
 	case IIO_CHAN_INFO_SCALE:
 		*val = 0;
-		switch (data->type) {
-		case ADXL345:
-			*val2 = adxl345_uscale;
-			break;
-		case ADXL375:
-			*val2 = adxl375_uscale;
-			break;
-		}
-
+		*val2 = data->info->uscale;
 		return IIO_VAL_INT_PLUS_MICRO;
 	case IIO_CHAN_INFO_CALIBBIAS:
 		ret = regmap_read(data->regmap,
@@ -139,7 +116,7 @@ static int adxl345_read_raw(struct iio_dev *indio_dev,
 
 		samp_freq_nhz = ADXL345_BASE_RATE_NANO_HZ <<
 				(regval & ADXL345_BW_RATE);
-		*val = div_s64_rem(samp_freq_nhz, NHZ_PER_HZ, val2);
+		*val = div_s64_rem(samp_freq_nhz, NANOHZ_PER_HZ, val2);
 
 		return IIO_VAL_INT_PLUS_NANO;
 	}
@@ -164,7 +141,8 @@ static int adxl345_write_raw(struct iio_dev *indio_dev,
 				    ADXL345_REG_OFS_AXIS(chan->address),
 				    val / 4);
 	case IIO_CHAN_INFO_SAMP_FREQ:
-		n = div_s64(val * NHZ_PER_HZ + val2, ADXL345_BASE_RATE_NANO_HZ);
+		n = div_s64(val * NANOHZ_PER_HZ + val2,
+			    ADXL345_BASE_RATE_NANO_HZ);
 
 		return regmap_update_bits(data->regmap, ADXL345_REG_BW_RATE,
 					  ADXL345_BW_RATE,
@@ -221,24 +199,10 @@ static void adxl345_powerdown(void *regmap)
 
 int adxl345_core_probe(struct device *dev, struct regmap *regmap)
 {
-	enum adxl345_device_type type;
 	struct adxl345_data *data;
 	struct iio_dev *indio_dev;
-	const char *name;
 	u32 regval;
 	int ret;
-
-	type = (uintptr_t)device_get_match_data(dev);
-	switch (type) {
-	case ADXL345:
-		name = "adxl345";
-		break;
-	case ADXL375:
-		name = "adxl375";
-		break;
-	default:
-		return -EINVAL;
-	}
 
 	ret = regmap_read(regmap, ADXL345_REG_DEVID, &regval);
 	if (ret < 0)
@@ -254,16 +218,18 @@ int adxl345_core_probe(struct device *dev, struct regmap *regmap)
 
 	data = iio_priv(indio_dev);
 	data->regmap = regmap;
-	data->type = type;
 	/* Enable full-resolution mode */
 	data->data_range = ADXL345_DATA_FORMAT_FULL_RES;
+	data->info = device_get_match_data(dev);
+	if (!data->info)
+		return -ENODEV;
 
 	ret = regmap_write(data->regmap, ADXL345_REG_DATA_FORMAT,
 			   data->data_range);
 	if (ret < 0)
 		return dev_err_probe(dev, ret, "Failed to set data range\n");
 
-	indio_dev->name = name;
+	indio_dev->name = data->info->name;
 	indio_dev->info = &adxl345_info;
 	indio_dev->modes = INDIO_DIRECT_MODE;
 	indio_dev->channels = adxl345_channels;

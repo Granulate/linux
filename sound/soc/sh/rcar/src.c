@@ -22,6 +22,7 @@
  * #define RSND_DEBUG_NO_IRQ_STATUS 1
  */
 
+#include <linux/of_irq.h>
 #include "rsnd.h"
 
 #define SRC_NAME "src"
@@ -463,11 +464,14 @@ static int rsnd_src_init(struct rsnd_mod *mod,
 			 struct rsnd_priv *priv)
 {
 	struct rsnd_src *src = rsnd_mod_to_src(mod);
+	int ret;
 
 	/* reset sync convert_rate */
 	src->sync.val = 0;
 
-	rsnd_mod_power_on(mod);
+	ret = rsnd_mod_power_on(mod);
+	if (ret < 0)
+		return ret;
 
 	rsnd_src_activation(mod);
 

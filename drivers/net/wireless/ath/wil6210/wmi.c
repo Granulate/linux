@@ -780,7 +780,7 @@ static void wmi_evt_ready(struct wil6210_vif *vif, int id, void *d, int len)
 		return; /* FW load will fail after timeout */
 	}
 	/* ignore MAC address, we already have it from the boot loader */
-	strlcpy(wiphy->fw_version, wil->fw_version, sizeof(wiphy->fw_version));
+	strscpy(wiphy->fw_version, wil->fw_version, sizeof(wiphy->fw_version));
 
 	if (len > offsetof(struct wmi_ready_event, rfc_read_calib_result)) {
 		wil_dbg_wmi(wil, "rfc calibration result %d\n",
@@ -870,7 +870,6 @@ static void wmi_evt_rx_mgmt(struct wil6210_vif *vif, int id, void *d, int len)
 		struct cfg80211_bss *bss;
 		struct cfg80211_inform_bss bss_data = {
 			.chan = channel,
-			.scan_width = NL80211_BSS_CHAN_WIDTH_20,
 			.signal = signal,
 			.boottime_ns = ktime_to_ns(ktime_get_boottime()),
 		};
@@ -1389,7 +1388,6 @@ wmi_evt_sched_scan_result(struct wil6210_vif *vif, int id, void *d, int len)
 	u32 d_len;
 	struct cfg80211_bss *bss;
 	struct cfg80211_inform_bss bss_data = {
-		.scan_width = NL80211_BSS_CHAN_WIDTH_20,
 		.boottime_ns = ktime_to_ns(ktime_get_boottime()),
 	};
 

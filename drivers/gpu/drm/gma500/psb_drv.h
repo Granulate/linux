@@ -161,16 +161,10 @@
 
 #define PSB_NUM_VBLANKS 2
 
-
-#define PSB_2D_SIZE (256*1024*1024)
-#define PSB_MAX_RELOC_PAGES 1024
-
-#define PSB_LOW_REG_OFFS 0x0204
-#define PSB_HIGH_REG_OFFS 0x0600
-
-#define PSB_NUM_VBLANKS 2
 #define PSB_WATCHDOG_DELAY (HZ * 2)
 #define PSB_LID_DELAY (HZ / 10)
+
+#define PSB_MAX_BRIGHTNESS		100
 
 #define PSB_PWR_STATE_ON		1
 #define PSB_PWR_STATE_OFF		2
@@ -190,8 +184,6 @@
 #define KSEL_BYPASS_19 5
 #define KSEL_BYPASS_25 6
 #define KSEL_BYPASS_83_100 7
-
-struct drm_fb_helper;
 
 struct opregion_header;
 struct opregion_acpi;
@@ -424,11 +416,10 @@ struct drm_psb_private {
 	uint32_t pipestat[PSB_NUM_PIPE];
 
 	spinlock_t irqmask_lock;
+	bool irq_enabled;
 
 	/* Power */
-	bool suspended;
-	bool display_power;
-	int display_count;
+	bool pm_initialized;
 
 	/* Modesetting */
 	struct psb_intel_mode_device mode_dev;
@@ -486,9 +477,6 @@ struct drm_psb_private {
 	unsigned int core_freq;
 	uint32_t iLVDS_enable;
 
-	/* Runtime PM state */
-	int rpm_enabled;
-
 	/* MID specific */
 	bool use_msi;
 	bool has_gct;
@@ -524,12 +512,6 @@ struct drm_psb_private {
 	int backlight_level;
 	uint32_t blc_adj1;
 	uint32_t blc_adj2;
-
-	struct drm_fb_helper *fb_helper;
-
-	/* Panel brightness */
-	int brightness;
-	int brightness_adjusted;
 
 	bool dsr_enable;
 	u32 dsr_fb_update;
@@ -599,10 +581,13 @@ struct psb_ops {
 	void (*disable_sr)(struct drm_device *dev);
 
 	void (*lvds_bl_power)(struct drm_device *dev, bool on);
-#ifdef CONFIG_BACKLIGHT_CLASS_DEVICE
+
 	/* Backlight */
 	int (*backlight_init)(struct drm_device *dev);
-#endif
+	void (*backlight_set)(struct drm_device *dev, int level);
+	int (*backlight_get)(struct drm_device *dev);
+	const char *backlight_name;
+
 	int i2c_bus;		/* I2C bus identifier for Moorestown */
 };
 
@@ -613,7 +598,19 @@ extern void psb_lid_timer_takedown(struct drm_psb_private *dev_priv);
 /* modesetting */
 extern void psb_modeset_init(struct drm_device *dev);
 extern void psb_modeset_cleanup(struct drm_device *dev);
-extern int psb_fbdev_init(struct drm_device *dev);
+
+/* framebuffer */
+struct drm_framebuffer *psb_framebuffer_create(struct drm_device *dev,
+					       const struct drm_mode_fb_cmd2 *mode_cmd,
+					       struct drm_gem_object *obj);
+
+/* fbdev */
+#if defined(CONFIG_DRM_FBDEV_EMULATION)
+void psb_fbdev_setup(struct drm_psb_private *dev_priv);
+#else
+static inline void psb_fbdev_setup(struct drm_psb_private *dev_priv)
+{ }
+#endif
 
 /* backlight.c */
 int gma_backlight_init(struct drm_device *dev);

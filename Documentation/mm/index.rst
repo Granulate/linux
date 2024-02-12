@@ -1,6 +1,6 @@
-=====================================
-Linux Memory Management Documentation
-=====================================
+===============================
+Memory Management Documentation
+===============================
 
 Memory Management Guide
 =======================
@@ -44,13 +44,13 @@ above structured documentation, or deleted if it has served its purpose.
    balance
    damon/index
    free_page_reporting
-   frontswap
    hmm
    hwpoison
    hugetlbfs_reserv
    ksm
    memory-model
    mmu_notifier
+   multigen_lru
    numa
    overcommit-accounting
    page_migration

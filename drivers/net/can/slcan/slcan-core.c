@@ -583,7 +583,7 @@ static void slcan_transmit(struct work_struct *work)
  */
 static void slcan_write_wakeup(struct tty_struct *tty)
 {
-	struct slcan *sl = (struct slcan *)tty->disc_data;
+	struct slcan *sl = tty->disc_data;
 
 	schedule_work(&sl->tx_work);
 }
@@ -594,7 +594,7 @@ static netdev_tx_t slcan_netdev_xmit(struct sk_buff *skb,
 {
 	struct slcan *sl = netdev_priv(dev);
 
-	if (can_dropped_invalid_skb(dev, skb))
+	if (can_dev_dropped_skb(dev, skb))
 		return NETDEV_TX_OK;
 
 	spin_lock(&sl->lock);
@@ -774,11 +774,10 @@ static const struct net_device_ops slcan_netdev_ops = {
  * be re-entered while running but other ldisc functions may be called
  * in parallel
  */
-static void slcan_receive_buf(struct tty_struct *tty,
-			      const unsigned char *cp, const char *fp,
-			      int count)
+static void slcan_receive_buf(struct tty_struct *tty, const u8 *cp,
+			      const u8 *fp, size_t count)
 {
-	struct slcan *sl = (struct slcan *)tty->disc_data;
+	struct slcan *sl = tty->disc_data;
 
 	if (!netif_running(sl->dev))
 		return;
@@ -862,13 +861,15 @@ static int slcan_open(struct tty_struct *tty)
  */
 static void slcan_close(struct tty_struct *tty)
 {
-	struct slcan *sl = (struct slcan *)tty->disc_data;
+	struct slcan *sl = tty->disc_data;
 
-	/* unregister_netdev() calls .ndo_stop() so we don't have to.
-	 * Our .ndo_stop() also flushes the TTY write wakeup handler,
-	 * so we can safely set sl->tty = NULL after this.
-	 */
 	unregister_candev(sl->dev);
+
+	/*
+	 * The netdev needn't be UP (so .ndo_stop() is not called). Hence make
+	 * sure this is not running before freeing it up.
+	 */
+	flush_work(&sl->tx_work);
 
 	/* Mark channel as dead */
 	spin_lock_bh(&sl->lock);
@@ -884,7 +885,7 @@ static void slcan_close(struct tty_struct *tty)
 static int slcan_ioctl(struct tty_struct *tty, unsigned int cmd,
 		       unsigned long arg)
 {
-	struct slcan *sl = (struct slcan *)tty->disc_data;
+	struct slcan *sl = tty->disc_data;
 	unsigned int tmp;
 
 	switch (cmd) {

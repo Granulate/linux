@@ -12,9 +12,7 @@
 #include <linux/bitrev.h>
 #include <linux/clk.h>
 #include <linux/module.h>
-#include <linux/of_address.h>
-#include <linux/of_device.h>
-#include <linux/of_irq.h>
+#include <linux/of.h>
 #include <linux/regmap.h>
 #include <linux/pm_runtime.h>
 
@@ -43,6 +41,8 @@ static u8 srpc_dpll_locked[] = { 0x0, 0x1, 0x2, 0x3, 0x4, 0xa, 0xb };
 #define SRPC_NODPLL_START2	0xc
 
 #define DEFAULT_RXCLK_SRC	1
+
+#define RX_SAMPLE_RATE_KCONTROL "RX Sample Rate"
 
 /**
  * struct fsl_spdif_soc_data: soc specific data
@@ -98,6 +98,8 @@ struct spdif_mixer_control {
  * @soc: SPDIF soc data
  * @fsl_spdif_control: SPDIF control data
  * @cpu_dai_drv: cpu dai driver
+ * @snd_card: sound card pointer
+ * @rxrate_kcontrol: kcontrol for RX Sample Rate
  * @pdev: platform device pointer
  * @regmap: regmap handler
  * @dpll_locked: dpll lock flag
@@ -122,6 +124,8 @@ struct fsl_spdif_priv {
 	const struct fsl_spdif_soc_data *soc;
 	struct spdif_mixer_control fsl_spdif_control;
 	struct snd_soc_dai_driver cpu_dai_drv;
+	struct snd_card *snd_card;
+	struct snd_kcontrol *rxrate_kcontrol;
 	struct platform_device *pdev;
 	struct regmap *regmap;
 	bool dpll_locked;
@@ -226,6 +230,12 @@ static void spdif_irq_dpll_lock(struct fsl_spdif_priv *spdif_priv)
 			locked ? "locked" : "loss lock");
 
 	spdif_priv->dpll_locked = locked ? true : false;
+
+	if (spdif_priv->snd_card && spdif_priv->rxrate_kcontrol) {
+		snd_ctl_notify(spdif_priv->snd_card,
+			       SNDRV_CTL_EVENT_MASK_VALUE,
+			       &spdif_priv->rxrate_kcontrol->id);
+	}
 }
 
 /* Receiver found illegal symbol interrupt handler */
@@ -490,8 +500,8 @@ static int fsl_spdif_probe_txclk(struct fsl_spdif_priv *spdif_priv, enum spdif_t
 static int spdif_set_sample_rate(struct snd_pcm_substream *substream,
 				int sample_rate)
 {
-	struct snd_soc_pcm_runtime *rtd = asoc_substream_to_rtd(substream);
-	struct fsl_spdif_priv *spdif_priv = snd_soc_dai_get_drvdata(asoc_rtd_to_cpu(rtd, 0));
+	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
+	struct fsl_spdif_priv *spdif_priv = snd_soc_dai_get_drvdata(snd_soc_rtd_to_cpu(rtd, 0));
 	struct spdif_mixer_control *ctrl = &spdif_priv->fsl_spdif_control;
 	struct regmap *regmap = spdif_priv->regmap;
 	struct platform_device *pdev = spdif_priv->pdev;
@@ -502,6 +512,10 @@ static int spdif_set_sample_rate(struct snd_pcm_substream *substream,
 	int ret;
 
 	switch (sample_rate) {
+	case 22050:
+		rate = SPDIF_TXRATE_22050;
+		csfs = IEC958_AES3_CON_FS_22050;
+		break;
 	case 32000:
 		rate = SPDIF_TXRATE_32000;
 		csfs = IEC958_AES3_CON_FS_32000;
@@ -589,8 +603,8 @@ clk_set_bypass:
 static int fsl_spdif_startup(struct snd_pcm_substream *substream,
 			     struct snd_soc_dai *cpu_dai)
 {
-	struct snd_soc_pcm_runtime *rtd = asoc_substream_to_rtd(substream);
-	struct fsl_spdif_priv *spdif_priv = snd_soc_dai_get_drvdata(asoc_rtd_to_cpu(rtd, 0));
+	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
+	struct fsl_spdif_priv *spdif_priv = snd_soc_dai_get_drvdata(snd_soc_rtd_to_cpu(rtd, 0));
 	struct platform_device *pdev = spdif_priv->pdev;
 	struct regmap *regmap = spdif_priv->regmap;
 	u32 scr, mask;
@@ -631,8 +645,8 @@ static int fsl_spdif_startup(struct snd_pcm_substream *substream,
 static void fsl_spdif_shutdown(struct snd_pcm_substream *substream,
 				struct snd_soc_dai *cpu_dai)
 {
-	struct snd_soc_pcm_runtime *rtd = asoc_substream_to_rtd(substream);
-	struct fsl_spdif_priv *spdif_priv = snd_soc_dai_get_drvdata(asoc_rtd_to_cpu(rtd, 0));
+	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
+	struct fsl_spdif_priv *spdif_priv = snd_soc_dai_get_drvdata(snd_soc_rtd_to_cpu(rtd, 0));
 	struct regmap *regmap = spdif_priv->regmap;
 	u32 scr, mask;
 
@@ -685,8 +699,8 @@ static int fsl_spdif_hw_params(struct snd_pcm_substream *substream,
 				struct snd_pcm_hw_params *params,
 				struct snd_soc_dai *dai)
 {
-	struct snd_soc_pcm_runtime *rtd = asoc_substream_to_rtd(substream);
-	struct fsl_spdif_priv *spdif_priv = snd_soc_dai_get_drvdata(asoc_rtd_to_cpu(rtd, 0));
+	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
+	struct fsl_spdif_priv *spdif_priv = snd_soc_dai_get_drvdata(snd_soc_rtd_to_cpu(rtd, 0));
 	struct spdif_mixer_control *ctrl = &spdif_priv->fsl_spdif_control;
 	struct platform_device *pdev = spdif_priv->pdev;
 	u32 sample_rate = params_rate(params);
@@ -720,8 +734,8 @@ static int fsl_spdif_hw_params(struct snd_pcm_substream *substream,
 static int fsl_spdif_trigger(struct snd_pcm_substream *substream,
 				int cmd, struct snd_soc_dai *dai)
 {
-	struct snd_soc_pcm_runtime *rtd = asoc_substream_to_rtd(substream);
-	struct fsl_spdif_priv *spdif_priv = snd_soc_dai_get_drvdata(asoc_rtd_to_cpu(rtd, 0));
+	struct snd_soc_pcm_runtime *rtd = snd_soc_substream_to_rtd(substream);
+	struct fsl_spdif_priv *spdif_priv = snd_soc_dai_get_drvdata(snd_soc_rtd_to_cpu(rtd, 0));
 	struct regmap *regmap = spdif_priv->regmap;
 	bool tx = substream->stream == SNDRV_PCM_STREAM_PLAYBACK;
 	u32 intr = SIE_INTR_FOR(tx);
@@ -739,6 +753,8 @@ static int fsl_spdif_trigger(struct snd_pcm_substream *substream,
 	case SNDRV_PCM_TRIGGER_PAUSE_PUSH:
 		regmap_update_bits(regmap, REG_SPDIF_SCR, dmaen, 0);
 		regmap_update_bits(regmap, REG_SPDIF_SIE, intr, 0);
+		regmap_write(regmap, REG_SPDIF_STL, 0x0);
+		regmap_write(regmap, REG_SPDIF_STR, 0x0);
 		break;
 	default:
 		return -EINVAL;
@@ -746,14 +762,6 @@ static int fsl_spdif_trigger(struct snd_pcm_substream *substream,
 
 	return 0;
 }
-
-static const struct snd_soc_dai_ops fsl_spdif_dai_ops = {
-	.startup = fsl_spdif_startup,
-	.hw_params = fsl_spdif_hw_params,
-	.trigger = fsl_spdif_trigger,
-	.shutdown = fsl_spdif_shutdown,
-};
-
 
 /*
  * FSL SPDIF IEC958 controller(mixer) functions
@@ -1197,7 +1205,7 @@ static struct snd_kcontrol_new fsl_spdif_ctrls[] = {
 	/* DPLL lock info get controller */
 	{
 		.iface = SNDRV_CTL_ELEM_IFACE_PCM,
-		.name = "RX Sample Rate",
+		.name = RX_SAMPLE_RATE_KCONTROL,
 		.access = SNDRV_CTL_ELEM_ACCESS_READ |
 			SNDRV_CTL_ELEM_ACCESS_VOLATILE,
 		.info = fsl_spdif_rxrate_info,
@@ -1251,6 +1259,13 @@ static int fsl_spdif_dai_probe(struct snd_soc_dai *dai)
 		snd_soc_add_dai_controls(dai, fsl_spdif_ctrls_rcm,
 					 ARRAY_SIZE(fsl_spdif_ctrls_rcm));
 
+	spdif_private->snd_card = dai->component->card->snd_card;
+	spdif_private->rxrate_kcontrol = snd_soc_card_get_kcontrol(dai->component->card,
+								   RX_SAMPLE_RATE_KCONTROL);
+	if (!spdif_private->rxrate_kcontrol)
+		dev_err(&spdif_private->pdev->dev, "failed to get %s kcontrol\n",
+			RX_SAMPLE_RATE_KCONTROL);
+
 	/*Clear the val bit for Tx*/
 	regmap_update_bits(spdif_private->regmap, REG_SPDIF_SCR,
 			   SCR_VAL_MASK, SCR_VAL_CLEAR);
@@ -1258,8 +1273,15 @@ static int fsl_spdif_dai_probe(struct snd_soc_dai *dai)
 	return 0;
 }
 
+static const struct snd_soc_dai_ops fsl_spdif_dai_ops = {
+	.probe		= fsl_spdif_dai_probe,
+	.startup	= fsl_spdif_startup,
+	.hw_params	= fsl_spdif_hw_params,
+	.trigger	= fsl_spdif_trigger,
+	.shutdown	= fsl_spdif_shutdown,
+};
+
 static struct snd_soc_dai_driver fsl_spdif_dai = {
-	.probe = &fsl_spdif_dai_probe,
 	.playback = {
 		.stream_name = "CPU-Playback",
 		.channels_min = 2,
@@ -1403,7 +1425,7 @@ static u32 fsl_spdif_txclk_caldiv(struct fsl_spdif_priv *spdif_priv,
 				struct clk *clk, u64 savesub,
 				enum spdif_txrate index, bool round)
 {
-	static const u32 rate[] = { 32000, 44100, 48000, 88200, 96000, 176400,
+	static const u32 rate[] = { 22050, 32000, 44100, 48000, 88200, 96000, 176400,
 				    192000, };
 	bool is_sysclk = clk_is_match(clk, spdif_priv->sysclk);
 	u64 rate_ideal, rate_actual, sub;
@@ -1464,7 +1486,7 @@ out:
 static int fsl_spdif_probe_txclk(struct fsl_spdif_priv *spdif_priv,
 				enum spdif_txrate index)
 {
-	static const u32 rate[] = { 32000, 44100, 48000, 88200, 96000, 176400,
+	static const u32 rate[] = { 22050, 32000, 44100, 48000, 88200, 96000, 176400,
 				    192000, };
 	struct platform_device *pdev = spdif_priv->pdev;
 	struct device *dev = &pdev->dev;
@@ -1640,11 +1662,9 @@ err_pm_disable:
 	return ret;
 }
 
-static int fsl_spdif_remove(struct platform_device *pdev)
+static void fsl_spdif_remove(struct platform_device *pdev)
 {
 	pm_runtime_disable(&pdev->dev);
-
-	return 0;
 }
 
 #ifdef CONFIG_PM
@@ -1746,7 +1766,7 @@ static struct platform_driver fsl_spdif_driver = {
 		.pm = &fsl_spdif_pm,
 	},
 	.probe = fsl_spdif_probe,
-	.remove = fsl_spdif_remove,
+	.remove_new = fsl_spdif_remove,
 };
 
 module_platform_driver(fsl_spdif_driver);

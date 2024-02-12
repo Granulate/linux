@@ -222,10 +222,8 @@ static int dt_cpufreq_early_init(struct device *dev, int cpu)
 	if (reg_name[0]) {
 		priv->opp_token = dev_pm_opp_set_regulators(cpu_dev, reg_name);
 		if (priv->opp_token < 0) {
-			ret = priv->opp_token;
-			if (ret != -EPROBE_DEFER)
-				dev_err(cpu_dev, "failed to set regulators: %d\n",
-					ret);
+			ret = dev_err_probe(cpu_dev, priv->opp_token,
+					    "failed to set regulators\n");
 			goto free_cpumask;
 		}
 	}
@@ -351,11 +349,10 @@ err:
 	return ret;
 }
 
-static int dt_cpufreq_remove(struct platform_device *pdev)
+static void dt_cpufreq_remove(struct platform_device *pdev)
 {
 	cpufreq_unregister_driver(&dt_cpufreq_driver);
 	dt_cpufreq_release();
-	return 0;
 }
 
 static struct platform_driver dt_cpufreq_platdrv = {
@@ -363,7 +360,7 @@ static struct platform_driver dt_cpufreq_platdrv = {
 		.name	= "cpufreq-dt",
 	},
 	.probe		= dt_cpufreq_probe,
-	.remove		= dt_cpufreq_remove,
+	.remove_new	= dt_cpufreq_remove,
 };
 module_platform_driver(dt_cpufreq_platdrv);
 

@@ -3,11 +3,13 @@
  * Copyright (C) 2019 Mellanox Technologies. All rights reserved
  */
 
+#include <linux/completion.h>
 #include <linux/device.h>
 #include <linux/idr.h>
 #include <linux/kernel.h>
 #include <linux/list.h>
 #include <linux/mutex.h>
+#include <linux/refcount.h>
 #include <linux/slab.h>
 #include <linux/sysfs.h>
 
@@ -17,6 +19,8 @@ static DEFINE_IDA(nsim_bus_dev_ids);
 static LIST_HEAD(nsim_bus_dev_list);
 static DEFINE_MUTEX(nsim_bus_dev_list_lock);
 static bool nsim_bus_enable;
+static refcount_t nsim_bus_devs; /* Including the bus itself. */
+static DECLARE_COMPLETION(nsim_bus_devs_released);
 
 static struct nsim_bus_dev *to_nsim_bus_dev(struct device *dev)
 {
@@ -117,6 +121,12 @@ static const struct attribute_group *nsim_bus_dev_attr_groups[] = {
 
 static void nsim_bus_dev_release(struct device *dev)
 {
+	struct nsim_bus_dev *nsim_bus_dev;
+
+	nsim_bus_dev = container_of(dev, struct nsim_bus_dev, dev);
+	kfree(nsim_bus_dev);
+	if (refcount_dec_and_test(&nsim_bus_devs))
+		complete(&nsim_bus_devs_released);
 }
 
 static struct device_type nsim_bus_dev_type = {
@@ -128,7 +138,7 @@ static struct nsim_bus_dev *
 nsim_bus_dev_new(unsigned int id, unsigned int port_count, unsigned int num_queues);
 
 static ssize_t
-new_device_store(struct bus_type *bus, const char *buf, size_t count)
+new_device_store(const struct bus_type *bus, const char *buf, size_t count)
 {
 	unsigned int id, port_count, num_queues;
 	struct nsim_bus_dev *nsim_bus_dev;
@@ -166,6 +176,7 @@ new_device_store(struct bus_type *bus, const char *buf, size_t count)
 		goto err;
 	}
 
+	refcount_inc(&nsim_bus_devs);
 	/* Allow using nsim_bus_dev */
 	smp_store_release(&nsim_bus_dev->init, true);
 
@@ -182,7 +193,7 @@ static BUS_ATTR_WO(new_device);
 static void nsim_bus_dev_del(struct nsim_bus_dev *nsim_bus_dev);
 
 static ssize_t
-del_device_store(struct bus_type *bus, const char *buf, size_t count)
+del_device_store(const struct bus_type *bus, const char *buf, size_t count)
 {
 	struct nsim_bus_dev *nsim_bus_dev, *tmp;
 	unsigned int id;
@@ -291,6 +302,8 @@ nsim_bus_dev_new(unsigned int id, unsigned int port_count, unsigned int num_queu
 
 err_nsim_bus_dev_id_free:
 	ida_free(&nsim_bus_dev_ids, nsim_bus_dev->dev.id);
+	put_device(&nsim_bus_dev->dev);
+	nsim_bus_dev = NULL;
 err_nsim_bus_dev_free:
 	kfree(nsim_bus_dev);
 	return ERR_PTR(err);
@@ -300,9 +313,8 @@ static void nsim_bus_dev_del(struct nsim_bus_dev *nsim_bus_dev)
 {
 	/* Disallow using nsim_bus_dev */
 	smp_store_release(&nsim_bus_dev->init, false);
-	device_unregister(&nsim_bus_dev->dev);
 	ida_free(&nsim_bus_dev_ids, nsim_bus_dev->dev.id);
-	kfree(nsim_bus_dev);
+	device_unregister(&nsim_bus_dev->dev);
 }
 
 static struct device_driver nsim_driver = {
@@ -321,6 +333,7 @@ int nsim_bus_init(void)
 	err = driver_register(&nsim_driver);
 	if (err)
 		goto err_bus_unregister;
+	refcount_set(&nsim_bus_devs, 1);
 	/* Allow using resources */
 	smp_store_release(&nsim_bus_enable, true);
 	return 0;
@@ -336,6 +349,8 @@ void nsim_bus_exit(void)
 
 	/* Disallow using resources */
 	smp_store_release(&nsim_bus_enable, false);
+	if (refcount_dec_and_test(&nsim_bus_devs))
+		complete(&nsim_bus_devs_released);
 
 	mutex_lock(&nsim_bus_dev_list_lock);
 	list_for_each_entry_safe(nsim_bus_dev, tmp, &nsim_bus_dev_list, list) {
@@ -343,6 +358,8 @@ void nsim_bus_exit(void)
 		nsim_bus_dev_del(nsim_bus_dev);
 	}
 	mutex_unlock(&nsim_bus_dev_list_lock);
+
+	wait_for_completion(&nsim_bus_devs_released);
 
 	driver_unregister(&nsim_driver);
 	bus_unregister(&nsim_bus);

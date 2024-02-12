@@ -55,6 +55,7 @@ struct sys_off_handler {
 	enum sys_off_mode mode;
 	bool blocking;
 	void *list;
+	struct device *dev;
 };
 
 /*
@@ -74,6 +75,7 @@ void __weak (*pm_power_off)(void);
 void emergency_restart(void)
 {
 	kmsg_dump(KMSG_DUMP_EMERG);
+	system_state = SYSTEM_RESTART;
 	machine_emergency_restart();
 }
 EXPORT_SYMBOL_GPL(emergency_restart);
@@ -243,6 +245,17 @@ void migrate_to_reboot_cpu(void)
 	set_cpus_allowed_ptr(current, cpumask_of(cpu));
 }
 
+/*
+ *	Notifier list for kernel code which wants to be called
+ *	to prepare system for restart.
+ */
+static BLOCKING_NOTIFIER_HEAD(restart_prep_handler_list);
+
+static void do_kernel_restart_prepare(void)
+{
+	blocking_notifier_call_chain(&restart_prep_handler_list, 0, NULL);
+}
+
 /**
  *	kernel_restart - reboot the system
  *	@cmd: pointer to buffer containing command to execute for restart
@@ -254,6 +267,7 @@ void migrate_to_reboot_cpu(void)
 void kernel_restart(char *cmd)
 {
 	kernel_restart_prepare(cmd);
+	do_kernel_restart_prepare();
 	migrate_to_reboot_cpu();
 	syscore_shutdown();
 	if (!cmd)
@@ -311,6 +325,7 @@ static int sys_off_notify(struct notifier_block *nb,
 	data.cb_data = handler->cb_data;
 	data.mode = mode;
 	data.cmd = cmd;
+	data.dev = handler->dev;
 
 	return handler->sys_off_cb(&data);
 }
@@ -394,6 +409,11 @@ register_sys_off_handler(enum sys_off_mode mode,
 
 	case SYS_OFF_MODE_POWER_OFF:
 		handler->list = &power_off_handler_list;
+		break;
+
+	case SYS_OFF_MODE_RESTART_PREPARE:
+		handler->list = &restart_prep_handler_list;
+		handler->blocking = true;
 		break;
 
 	case SYS_OFF_MODE_RESTART:
@@ -493,6 +513,7 @@ int devm_register_sys_off_handler(struct device *dev,
 	handler = register_sys_off_handler(mode, priority, callback, cb_data);
 	if (IS_ERR(handler))
 		return PTR_ERR(handler);
+	handler->dev = dev;
 
 	return devm_add_action_or_reset(dev, devm_unregister_sys_off_handler,
 					handler);

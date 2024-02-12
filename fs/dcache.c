@@ -78,7 +78,7 @@ __cacheline_aligned_in_smp DEFINE_SEQLOCK(rename_lock);
 
 EXPORT_SYMBOL(rename_lock);
 
-static struct kmem_cache *dentry_cache __read_mostly;
+static struct kmem_cache *dentry_cache __ro_after_init;
 
 const struct qstr empty_name = QSTR_INIT("", 0);
 EXPORT_SYMBOL(empty_name);
@@ -96,9 +96,9 @@ EXPORT_SYMBOL(dotdot_name);
  * information, yet avoid using a prime hash-size or similar.
  */
 
-static unsigned int d_hash_shift __read_mostly;
+static unsigned int d_hash_shift __ro_after_init;
 
-static struct hlist_bl_head *dentry_hashtable __read_mostly;
+static struct hlist_bl_head *dentry_hashtable __ro_after_init;
 
 static inline struct hlist_bl_head *d_hash(unsigned int hash)
 {
@@ -1664,7 +1664,7 @@ static enum d_walk_ret umount_check(void *_data, struct dentry *dentry)
 	if (dentry == _data && dentry->d_lockref.count == 1)
 		return D_WALK_CONTINUE;
 
-	printk(KERN_ERR "BUG: Dentry %p{i=%lx,n=%pd} "
+	WARN(1, "BUG: Dentry %p{i=%lx,n=%pd} "
 			" still in use (%d) [unmount of %s %s]\n",
 		       dentry,
 		       dentry->d_inode ?
@@ -1673,7 +1673,6 @@ static enum d_walk_ret umount_check(void *_data, struct dentry *dentry)
 		       dentry->d_lockref.count,
 		       dentry->d_sb->s_type->name,
 		       dentry->d_sb->s_id);
-	WARN_ON(1);
 	return D_WALK_CONTINUE;
 }
 
@@ -2597,15 +2596,7 @@ EXPORT_SYMBOL(d_rehash);
 
 static inline unsigned start_dir_add(struct inode *dir)
 {
-	/*
-	 * The caller holds a spinlock (dentry::d_lock). On !PREEMPT_RT
-	 * kernels spin_lock() implicitly disables preemption, but not on
-	 * PREEMPT_RT.  So for RT it has to be done explicitly to protect
-	 * the sequence count write side critical section against a reader
-	 * or another writer preempting, which would result in a live lock.
-	 */
-	if (IS_ENABLED(CONFIG_PREEMPT_RT))
-		preempt_disable();
+	preempt_disable_nested();
 	for (;;) {
 		unsigned n = dir->i_dir_seq;
 		if (!(n & 1) && cmpxchg(&dir->i_dir_seq, n, n + 1) == n)
@@ -2618,8 +2609,7 @@ static inline void end_dir_add(struct inode *dir, unsigned int n,
 			       wait_queue_head_t *d_wait)
 {
 	smp_store_release(&dir->i_dir_seq, n + 2);
-	if (IS_ENABLED(CONFIG_PREEMPT_RT))
-		preempt_enable();
+	preempt_enable_nested();
 	wake_up_all(d_wait);
 }
 
@@ -3256,11 +3246,10 @@ void d_genocide(struct dentry *parent)
 	d_walk(parent, parent, d_genocide_kill);
 }
 
-EXPORT_SYMBOL(d_genocide);
-
-void d_tmpfile(struct dentry *dentry, struct inode *inode)
+void d_mark_tmpfile(struct file *file, struct inode *inode)
 {
-	inode_dec_link_count(inode);
+	struct dentry *dentry = file->f_path.dentry;
+
 	BUG_ON(dentry->d_name.name != dentry->d_iname ||
 		!hlist_unhashed(&dentry->d_u.d_alias) ||
 		!d_unlinked(dentry));
@@ -3270,6 +3259,15 @@ void d_tmpfile(struct dentry *dentry, struct inode *inode)
 				(unsigned long long)inode->i_ino);
 	spin_unlock(&dentry->d_lock);
 	spin_unlock(&dentry->d_parent->d_lock);
+}
+EXPORT_SYMBOL(d_mark_tmpfile);
+
+void d_tmpfile(struct file *file, struct inode *inode)
+{
+	struct dentry *dentry = file->f_path.dentry;
+
+	inode_dec_link_count(inode);
+	d_mark_tmpfile(file, inode);
 	d_instantiate(dentry, inode);
 }
 EXPORT_SYMBOL(d_tmpfile);
@@ -3334,7 +3332,7 @@ static void __init dcache_init(void)
 }
 
 /* SLAB cache for __getname() consumers */
-struct kmem_cache *names_cachep __read_mostly;
+struct kmem_cache *names_cachep __ro_after_init;
 EXPORT_SYMBOL(names_cachep);
 
 void __init vfs_caches_init_early(void)

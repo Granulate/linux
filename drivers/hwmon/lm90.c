@@ -103,9 +103,10 @@
 #include <linux/interrupt.h>
 #include <linux/jiffies.h>
 #include <linux/hwmon.h>
+#include <linux/kstrtox.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
-#include <linux/of_device.h>
+#include <linux/of.h>
 #include <linux/regulator/consumer.h>
 #include <linux/slab.h>
 #include <linux/workqueue.h>
@@ -2547,7 +2548,7 @@ static int lm90_detect(struct i2c_client *client, struct i2c_board_info *info)
 		return -ENODEV;
 	}
 
-	strlcpy(info->type, name, I2C_NAME_SIZE);
+	strscpy(info->type, name, I2C_NAME_SIZE);
 
 	return 0;
 }
@@ -2663,11 +2664,6 @@ static void lm90_remove_pec(void *dev)
 	device_remove_file(dev, &dev_attr_pec);
 }
 
-static void lm90_regulator_disable(void *regulator)
-{
-	regulator_disable(regulator);
-}
-
 static int lm90_probe_channel_from_dt(struct i2c_client *client,
 				      struct device_node *child,
 				      struct lm90_data *data)
@@ -2749,24 +2745,13 @@ static int lm90_probe(struct i2c_client *client)
 	struct device *dev = &client->dev;
 	struct i2c_adapter *adapter = client->adapter;
 	struct hwmon_channel_info *info;
-	struct regulator *regulator;
 	struct device *hwmon_dev;
 	struct lm90_data *data;
 	int err;
 
-	regulator = devm_regulator_get(dev, "vcc");
-	if (IS_ERR(regulator))
-		return PTR_ERR(regulator);
-
-	err = regulator_enable(regulator);
-	if (err < 0) {
-		dev_err(dev, "Failed to enable regulator: %d\n", err);
-		return err;
-	}
-
-	err = devm_add_action_or_reset(dev, lm90_regulator_disable, regulator);
+	err = devm_regulator_get_enable(dev, "vcc");
 	if (err)
-		return err;
+		return dev_err_probe(dev, err, "Failed to enable regulator\n");
 
 	data = devm_kzalloc(dev, sizeof(struct lm90_data), GFP_KERNEL);
 	if (!data)
@@ -2780,7 +2765,7 @@ static int lm90_probe(struct i2c_client *client)
 
 	/* Set the device type */
 	if (client->dev.of_node)
-		data->kind = (enum chips)of_device_get_match_data(&client->dev);
+		data->kind = (uintptr_t)of_device_get_match_data(&client->dev);
 	else
 		data->kind = i2c_match_id(lm90_id, client)->driver_data;
 
@@ -2956,7 +2941,7 @@ static void lm90_alert(struct i2c_client *client, enum i2c_alert_protocol type,
 	}
 }
 
-static int __maybe_unused lm90_suspend(struct device *dev)
+static int lm90_suspend(struct device *dev)
 {
 	struct lm90_data *data = dev_get_drvdata(dev);
 	struct i2c_client *client = data->client;
@@ -2967,7 +2952,7 @@ static int __maybe_unused lm90_suspend(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused lm90_resume(struct device *dev)
+static int lm90_resume(struct device *dev)
 {
 	struct lm90_data *data = dev_get_drvdata(dev);
 	struct i2c_client *client = data->client;
@@ -2978,16 +2963,16 @@ static int __maybe_unused lm90_resume(struct device *dev)
 	return 0;
 }
 
-static SIMPLE_DEV_PM_OPS(lm90_pm_ops, lm90_suspend, lm90_resume);
+static DEFINE_SIMPLE_DEV_PM_OPS(lm90_pm_ops, lm90_suspend, lm90_resume);
 
 static struct i2c_driver lm90_driver = {
 	.class		= I2C_CLASS_HWMON,
 	.driver = {
 		.name	= "lm90",
 		.of_match_table = of_match_ptr(lm90_of_match),
-		.pm	= &lm90_pm_ops,
+		.pm	= pm_sleep_ptr(&lm90_pm_ops),
 	},
-	.probe_new	= lm90_probe,
+	.probe		= lm90_probe,
 	.alert		= lm90_alert,
 	.id_table	= lm90_id,
 	.detect		= lm90_detect,

@@ -6,6 +6,7 @@
  * Copyright (C) 2005 Arcom Control Systems Ltd.
  */
 
+#include <linux/aperture.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
@@ -254,14 +255,11 @@ static int parse_panel_option(struct fb_info *info)
 
 static const struct fb_ops gx1fb_ops = {
 	.owner		= THIS_MODULE,
+	FB_DEFAULT_IOMEM_OPS,
 	.fb_check_var	= gx1fb_check_var,
 	.fb_set_par	= gx1fb_set_par,
 	.fb_setcolreg	= gx1fb_setcolreg,
 	.fb_blank       = gx1fb_blank,
-	/* No HW acceleration for now. */
-	.fb_fillrect	= cfb_fillrect,
-	.fb_copyarea	= cfb_copyarea,
-	.fb_imageblit	= cfb_imageblit,
 };
 
 static struct fb_info *gx1fb_init_fbinfo(struct device *dev)
@@ -293,7 +291,6 @@ static struct fb_info *gx1fb_init_fbinfo(struct device *dev)
 	info->var.vmode	= FB_VMODE_NONINTERLACED;
 
 	info->fbops		= &gx1fb_ops;
-	info->flags		= FBINFO_DEFAULT;
 	info->node		= -1;
 
 	info->pseudo_palette	= (void *)par + sizeof(struct geodefb_par);
@@ -319,6 +316,10 @@ static int gx1fb_probe(struct pci_dev *pdev, const struct pci_device_id *id)
 	struct geodefb_par *par;
 	struct fb_info *info;
 	int ret;
+
+	ret = aperture_remove_conflicting_pci_devices(pdev, "gx1fb");
+	if (ret)
+		return ret;
 
 	info = gx1fb_init_fbinfo(&pdev->dev);
 	if (!info)
@@ -441,7 +442,12 @@ static int __init gx1fb_init(void)
 {
 #ifndef MODULE
 	char *option = NULL;
+#endif
 
+	if (fb_modesetting_disabled("gx1fb"))
+		return -ENODEV;
+
+#ifndef MODULE
 	if (fb_get_options("gx1fb", &option))
 		return -ENODEV;
 	gx1fb_setup(option);

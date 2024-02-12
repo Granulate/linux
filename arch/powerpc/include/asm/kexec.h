@@ -3,7 +3,7 @@
 #define _ASM_POWERPC_KEXEC_H
 #ifdef __KERNEL__
 
-#if defined(CONFIG_FSL_BOOKE) || defined(CONFIG_44x)
+#if defined(CONFIG_PPC_85xx) || defined(CONFIG_44x)
 
 /*
  * On FSL-BookE we setup a 1:1 mapping which covers the first 2GiB of memory
@@ -99,10 +99,14 @@ void relocate_new_kernel(unsigned long indirection_page, unsigned long reboot_co
 
 void kexec_copy_flush(struct kimage *image);
 
-#if defined(CONFIG_CRASH_DUMP) && defined(CONFIG_PPC_RTAS)
+#if defined(CONFIG_CRASH_DUMP)
+bool is_kdump_kernel(void);
+#define is_kdump_kernel			is_kdump_kernel
+#if defined(CONFIG_PPC_RTAS)
 void crash_free_reserved_phys_range(unsigned long begin, unsigned long end);
 #define crash_free_reserved_phys_range crash_free_reserved_phys_range
-#endif
+#endif /* CONFIG_PPC_RTAS */
+#endif /* CONFIG_CRASH_DUMP */
 
 #ifdef CONFIG_KEXEC_FILE
 extern const struct kexec_file_ops kexec_elf64_ops;

@@ -333,6 +333,18 @@ enum adv7511_type {
 
 #define ADV7511_MAX_ADDRS 3
 
+struct adv7511_chip_info {
+	enum adv7511_type type;
+	unsigned int max_mode_clock_khz;
+	unsigned int max_lane_freq_khz;
+	const char * const *supply_names;
+	unsigned int num_supplies;
+	unsigned int reg_cec_offset;
+	bool has_dsi;
+	bool link_config;
+	bool hpd_override_enable;
+};
+
 struct adv7511 {
 	struct i2c_client *i2c_main;
 	struct i2c_client *i2c_edid;
@@ -341,7 +353,6 @@ struct adv7511 {
 
 	struct regmap *regmap;
 	struct regmap *regmap_cec;
-	unsigned int reg_cec_offset;
 	enum drm_connector_status status;
 	bool powered;
 
@@ -369,7 +380,6 @@ struct adv7511 {
 	struct gpio_desc *gpio_pd;
 
 	struct regulator_bulk_data *supplies;
-	unsigned int num_supplies;
 
 	/* ADV7533 DSI RX related params */
 	struct device_node *host_node;
@@ -377,7 +387,7 @@ struct adv7511 {
 	u8 num_dsi_lanes;
 	bool use_timing_gen;
 
-	enum adv7511_type type;
+	const struct adv7511_chip_info *info;
 	struct platform_device *audio_pdev;
 
 	struct cec_adapter *cec_adap;
@@ -394,10 +404,7 @@ void adv7511_cec_irq_process(struct adv7511 *adv7511, unsigned int irq1);
 #else
 static inline int adv7511_cec_init(struct device *dev, struct adv7511 *adv7511)
 {
-	unsigned int offset = adv7511->type == ADV7533 ?
-						ADV7533_REG_CEC_OFFSET : 0;
-
-	regmap_write(adv7511->regmap, ADV7511_REG_CEC_CTRL + offset,
+	regmap_write(adv7511->regmap, ADV7511_REG_CEC_CTRL,
 		     ADV7511_CEC_CTRL_POWER_DOWN);
 	return 0;
 }
@@ -405,7 +412,8 @@ static inline int adv7511_cec_init(struct device *dev, struct adv7511 *adv7511)
 
 void adv7533_dsi_power_on(struct adv7511 *adv);
 void adv7533_dsi_power_off(struct adv7511 *adv);
-void adv7533_mode_set(struct adv7511 *adv, const struct drm_display_mode *mode);
+enum drm_mode_status adv7533_mode_valid(struct adv7511 *adv,
+					const struct drm_display_mode *mode);
 int adv7533_patch_registers(struct adv7511 *adv);
 int adv7533_patch_cec_registers(struct adv7511 *adv);
 int adv7533_attach_dsi(struct adv7511 *adv);
