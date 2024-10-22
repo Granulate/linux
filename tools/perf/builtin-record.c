@@ -3212,18 +3212,17 @@ static int switch_output_setup(struct record *rec)
 		return 0;
 	}
 
-	if (!strcmp(s->str, "signal")) {
+	// strstr, not strcmp, to allow it to be used with size/time.
+	if (strstr(s->str, "signal")) {
 do_signal:
 		s->signal = true;
 		pr_debug("switch-output with SIGUSR2 signal\n");
-		goto enabled;
 	}
 
 	val = parse_tag_value(s->str, tags_size);
 	if (val != (unsigned long) -1) {
 		s->size = val;
 		pr_debug("switch-output with %s size threshold\n", s->str);
-		goto enabled;
 	}
 
 	val = parse_tag_value(s->str, tags_time);
@@ -3231,6 +3230,9 @@ do_signal:
 		s->time = val;
 		pr_debug("switch-output with %s time threshold (%lu seconds)\n",
 			 s->str, s->time);
+	}
+
+	if (s->size || s->time || s->signal) {
 		goto enabled;
 	}
 

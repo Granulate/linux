@@ -256,11 +256,23 @@ static_var:
 	}
 
 	/* If this is based on frame buffer, set the offset */
-	if (op->atom == DW_OP_fbreg) {
+	if (op->atom == DW_OP_fbreg || op->atom == DW_OP_call_frame_cfa) {
 		if (fb_ops == NULL)
 			return -ENOTSUP;
 		ref = true;
-		offs = op->number;
+		if (op->atom == DW_OP_fbreg) {
+			offs = op->number;
+		} else if (nops == 3) {
+			/*
+			 * In the case of DW_OP_call_frame_cfa, we either have
+			 * an offset of 0 or we have two more expressions that
+			 * add a const
+			 */
+			if ((op + 1)->atom != DW_OP_consts ||
+			    (op + 2)->atom != DW_OP_plus)
+				return -ENOTSUP;
+			offs = (op + 1)->number;
+		}
 		op = &fb_ops[0];
 	}
 
@@ -376,10 +388,11 @@ static int convert_variable_type(Dwarf_Die *vr_die,
 			(*ref_ptr)->user_access = user_access;
 		}
 		if (!die_compare_name(&type, "char") &&
-		    !die_compare_name(&type, "unsigned char")) {
+		    !die_compare_name(&type, "unsigned char") &&
+			!die_compare_name(&type, "uint8")) {
 			pr_warning("Failed to cast into string: "
-				   "%s is not (unsigned) char *.\n",
-				   dwarf_diename(vr_die));
+				   "%s is not (unsigned) char * or uint8 *, it is %s *.\n",
+				   dwarf_diename(vr_die), dwarf_diename(&type));
 			return -EINVAL;
 		}
 		tvar->type = strdup(cast);

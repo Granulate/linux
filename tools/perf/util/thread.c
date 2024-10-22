@@ -305,6 +305,27 @@ const char *thread__comm_str(struct thread *thread)
 	return str;
 }
 
+static const char *__thread__exec_comm_str(struct thread *thread)
+{
+	const struct comm *comm = thread__exec_comm(thread);
+
+	if (!comm)
+		return NULL;
+
+	return comm__str(comm);
+}
+
+const char *thread__exec_comm_str(struct thread *thread)
+{
+	const char *str;
+
+	down_read(&thread->comm_lock);
+	str = __thread__exec_comm_str(thread);
+	up_read(&thread->comm_lock);
+
+	return str;
+}
+
 static int __thread__comm_len(struct thread *thread, const char *comm)
 {
 	if (!comm)
@@ -398,7 +419,7 @@ static int thread__clone_maps(struct thread *thread, struct thread *parent, bool
 int thread__fork(struct thread *thread, struct thread *parent, u64 timestamp, bool do_maps_clone)
 {
 	if (thread__comm_set(parent)) {
-		const char *comm = thread__comm_str(parent);
+		const char *comm = thread__exec_comm_str(parent);
 		int err;
 		if (!comm)
 			return -ENOMEM;

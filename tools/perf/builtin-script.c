@@ -134,6 +134,7 @@ enum perf_output_field {
 	PERF_OUTPUT_CGROUP          = 1ULL << 39,
 	PERF_OUTPUT_RETIRE_LAT      = 1ULL << 40,
 	PERF_OUTPUT_DSOFF           = 1ULL << 41,
+	PERF_OUTPUT_SYMLINE         = 1ULL << 42,
 };
 
 struct perf_script {
@@ -178,6 +179,7 @@ struct output_option {
 	{.str = "dsoff", .field = PERF_OUTPUT_DSOFF},
 	{.str = "addr",  .field = PERF_OUTPUT_ADDR},
 	{.str = "symoff", .field = PERF_OUTPUT_SYMOFFSET},
+	{.str = "symline", .field = PERF_OUTPUT_SYMLINE},
 	{.str = "srcline", .field = PERF_OUTPUT_SRCLINE},
 	{.str = "period", .field = PERF_OUTPUT_PERIOD},
 	{.str = "iregs", .field = PERF_OUTPUT_IREGS},
@@ -497,6 +499,11 @@ static int evsel__check_attr(struct evsel *evsel, struct perf_session *session)
 		       "selected.\n");
 		return -EINVAL;
 	}
+	if (PRINT_FIELD(SYMLINE) && !PRINT_FIELD(SYM)) {
+		pr_err("Display of line offsets requested but symbol is not"
+		       "selected.\n");
+		return -EINVAL;
+	}
 	if (PRINT_FIELD(DSO) &&
 	    !(evsel->core.attr.sample_type & (PERF_SAMPLE_IP|PERF_SAMPLE_ADDR))) {
 		pr_err("Display of DSO requested but no address to convert.\n");
@@ -581,6 +588,9 @@ static void set_print_ip_opts(struct perf_event_attr *attr)
 
 	if (PRINT_FIELD(SYMOFFSET))
 		output[type].print_ip_opts |= EVSEL__PRINT_SYMOFFSET;
+
+	if (PRINT_FIELD(SYMLINE))
+		output[type].print_ip_opts |= EVSEL__PRINT_SYMLINE;
 
 	if (PRINT_FIELD(SRCLINE))
 		output[type].print_ip_opts |= EVSEL__PRINT_SRCLINE;
@@ -790,14 +800,12 @@ static int perf_sample__fprintf_start(struct perf_script *script,
 		printed += fprintf(fp, "VCPU:%03d ", sample->vcpu);
 
 	if (PRINT_FIELD(COMM)) {
-		const char *comm = thread ? thread__comm_str(thread) : ":-1";
-
 		if (latency_format)
-			printed += fprintf(fp, "%8.8s ", comm);
+			printed += fprintf(fp, "%8.8s ", thread__exec_comm_str(thread));
 		else if (PRINT_FIELD(IP) && evsel__has_callchain(evsel) && symbol_conf.use_callchain)
-			printed += fprintf(fp, "%s ", comm);
+			printed += fprintf(fp, "%s ", thread__exec_comm_str(thread));
 		else
-			printed += fprintf(fp, "%16s ", comm);
+			printed += fprintf(fp, "%16s ", thread__exec_comm_str(thread));
 	}
 
 	if (PRINT_FIELD(PID) && PRINT_FIELD(TID))
