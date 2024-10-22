@@ -157,11 +157,9 @@ int symbol__annotation_init(void);
 
 struct symbol *symbol__new(u64 start, u64 len, u8 binding, u8 type, const char *name);
 size_t __symbol__fprintf_sym_offs(const struct symbol *sym,
-				      const struct addr_location *al,
-				      bool unknown_as_addr,
-				      bool print_offsets,
-				      bool print_line,
-                      FILE *fp);
+				  const struct addr_location *al,
+				  bool unknown_as_addr, bool print_offsets,
+				  bool print_line, FILE *fp);
 size_t __symbol__fprintf_symname_offs(const struct symbol *sym,
 				      const struct addr_location *al,
 				      bool unknown_as_addr,
@@ -178,7 +176,7 @@ bool symbol__restricted_filename(const char *filename,
 int symbol__config_symfs(const struct option *opt __maybe_unused,
 			 const char *dir, int unset __maybe_unused);
 size_t symbol__fprintf_symline_offs(const struct symbol *sym,
-				      const struct addr_location *al, FILE *fp);
+				    const struct addr_location *al, FILE *fp);
 
 struct symsrc;
 
