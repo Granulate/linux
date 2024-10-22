@@ -119,6 +119,7 @@ int sample__fprintf_callchain(struct perf_sample *sample, int left_alignment,
 	int print_dso = print_opts & EVSEL__PRINT_DSO;
 	int print_dsoff = print_opts & EVSEL__PRINT_DSOFF;
 	int print_symoffset = print_opts & EVSEL__PRINT_SYMOFFSET;
+	int print_symline = print_opts & EVSEL__PRINT_SYMLINE;
 	int print_oneline = print_opts & EVSEL__PRINT_ONELINE;
 	int print_srcline = print_opts & EVSEL__PRINT_SRCLINE;
 	int print_unknown_as_addr = print_opts & EVSEL__PRINT_UNKNOWN_AS_ADDR;
@@ -167,7 +168,9 @@ int sample__fprintf_callchain(struct perf_sample *sample, int left_alignment,
 				node_al.addr = addr;
 				node_al.map  = map__get(map);
 
-				if (print_symoffset) {
+				if (print_symline) {
+					printed += symbol__fprintf_symline_offs(sym, &node_al, fp);
+				} else if (print_symoffset) {
 					printed += __symbol__fprintf_symname_offs(sym, &node_al,
 										  print_unknown_as_addr,
 										  true, fp);
