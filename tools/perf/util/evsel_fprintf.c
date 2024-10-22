@@ -168,10 +168,9 @@ int sample__fprintf_callchain(struct perf_sample *sample, int left_alignment,
 				node_al.addr = addr;
 				node_al.map  = map__get(map);
 
-                if (print_symline) {
+				if (print_symline) {
 					printed += symbol__fprintf_symline_offs(sym, &node_al, fp);
-                }
-                else if (print_symoffset) {
+				} else if (print_symoffset) {
 					printed += __symbol__fprintf_symname_offs(sym, &node_al,
 										  print_unknown_as_addr,
 										  true, fp);
