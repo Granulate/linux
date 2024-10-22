@@ -49,7 +49,7 @@ size_t __symbol__fprintf_sym_offs(const struct symbol *sym,
 					offset = al->addr - sym->start;
 				else
 					offset = al->addr - map__start(al->map) - sym->start;
-                length += fprintf(fp, "+0x%lx", offset);
+				length += fprintf(fp, "+0x%lx", offset);
 			}
 		}
 		return length;
