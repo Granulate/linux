@@ -2,6 +2,7 @@
 #include <elf.h>
 #include <inttypes.h>
 #include <stdio.h>
+#include <ctype.h>
 
 #include "dso.h"
 #include "map.h"
@@ -15,6 +16,12 @@ size_t symbol__fprintf(struct symbol *sym, FILE *fp)
 		       sym->binding == STB_GLOBAL ? 'g' :
 		       sym->binding == STB_LOCAL  ? 'l' : 'w',
 		       sym->name);
+}
+
+static int __is_srcline(const char *str)
+{
+	return str && *str && str != SRCLINE_UNKNOWN &&
+	       isdigit((unsigned char)str[strlen(str) - 1]);
 }
 
 size_t __symbol__fprintf_sym_offs(const struct symbol *sym,
@@ -31,19 +38,21 @@ size_t __symbol__fprintf_sym_offs(const struct symbol *sym,
 			if (print_line) {
 				int ret = 0;
 				char *srcline = map__srcline(al->map, al->addr, NULL);
-				if (srcline != SRCLINE_UNKNOWN) {
+				if (__is_srcline(srcline)) {
 					ret = fprintf(fp, "+%s", srcline);
 					if (ret > 0)
 						length += (size_t)ret;
 				}
 				zfree_srcline(&srcline);
-				srcline = map__srcline(al->map, sym->start, NULL);
-				if (srcline != SRCLINE_UNKNOWN) {
-					ret = fprintf(fp, "+%s", srcline);
-					if (ret > 0)
-						length += (size_t)ret;
+				if (ret > 0) {
+					srcline = map__srcline(al->map, sym->start, NULL);
+					if (__is_srcline(srcline)) {
+						ret = fprintf(fp, "+%s", srcline);
+						if (ret > 0)
+							length += (size_t)ret;
+					}
+					zfree_srcline(&srcline);
 				}
-				zfree_srcline(&srcline);
 			} else {
 				if (al->addr < sym->end)
 					offset = al->addr - sym->start;
