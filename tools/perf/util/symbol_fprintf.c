@@ -20,7 +20,7 @@ size_t symbol__fprintf(struct symbol *sym, FILE *fp)
 
 static int __is_srcline(const char *str)
 {
-	return str && *str && str != SRCLINE_UNKNOWN &&
+	return str && *str && str[0] != '?' &&
 	       isdigit((unsigned char)str[strlen(str) - 1]);
 }
 
@@ -37,7 +37,10 @@ size_t __symbol__fprintf_sym_offs(const struct symbol *sym,
 		if (al && (print_offsets || print_line)) {
 			if (print_line) {
 				int ret = 0;
-				char *srcline = map__srcline(al->map, al->addr, NULL);
+				char *srcline = get_srcline(
+					map__dso(al->map),
+					map__rip_2objdump(al->map, al->addr),
+					NULL, false, false, al->addr);
 				if (__is_srcline(srcline)) {
 					ret = fprintf(fp, "+%s", srcline);
 					if (ret > 0)
@@ -45,7 +48,10 @@ size_t __symbol__fprintf_sym_offs(const struct symbol *sym,
 				}
 				zfree_srcline(&srcline);
 				if (ret > 0) {
-					srcline = map__srcline(al->map, sym->start, NULL);
+					srcline = get_srcline(
+						map__dso(al->map),
+						map__rip_2objdump(al->map, sym->start),
+						NULL, false, false, sym->start);
 					if (__is_srcline(srcline)) {
 						ret = fprintf(fp, "+%s", srcline);
 						if (ret > 0)
