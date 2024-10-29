@@ -322,6 +322,11 @@ static inline bool thread__is_filtered(struct thread *thread)
 		return true;
 	}
 
+	if (symbol_conf.no_comm_list &&
+	    strlist__has_entry(symbol_conf.no_comm_list, thread__comm_str(thread))) {
+		return true;
+	}
+
 	if (symbol_conf.pid_list &&
 	    !intlist__has_entry(symbol_conf.pid_list, thread__pid(thread))) {
 		return true;

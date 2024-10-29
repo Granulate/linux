@@ -2711,6 +2711,9 @@ int symbol__init(struct perf_env *env)
 		       symbol_conf.bt_stop_list_str, "symbol") < 0)
 		goto out_free_sym_list;
 
+	if (setup_list(&symbol_conf.no_comm_list,
+		       symbol_conf.no_comm_list_str, "no_comm") < 0)
+		goto out_free_bt_stop_list;
 	/*
 	 * A path to symbols of "/" is identical to ""
 	 * reset here for simplicity.
@@ -2728,6 +2731,8 @@ int symbol__init(struct perf_env *env)
 	symbol_conf.initialized = true;
 	return 0;
 
+out_free_bt_stop_list:
+	strlist__delete(symbol_conf.bt_stop_list);
 out_free_sym_list:
 	strlist__delete(symbol_conf.sym_list);
 	intlist__delete(symbol_conf.addr_list);
@@ -2750,11 +2755,12 @@ void symbol__exit(void)
 	strlist__delete(symbol_conf.sym_list);
 	strlist__delete(symbol_conf.dso_list);
 	strlist__delete(symbol_conf.comm_list);
+	strlist__delete(symbol_conf.no_comm_list);
 	intlist__delete(symbol_conf.tid_list);
 	intlist__delete(symbol_conf.pid_list);
 	intlist__delete(symbol_conf.addr_list);
 	vmlinux_path__exit();
-	symbol_conf.sym_list = symbol_conf.dso_list = symbol_conf.comm_list = NULL;
+	symbol_conf.sym_list = symbol_conf.dso_list = symbol_conf.comm_list = symbol_conf.no_comm_list = NULL;
 	symbol_conf.bt_stop_list = NULL;
 	symbol_conf.initialized = false;
 }

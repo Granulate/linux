@@ -3937,6 +3937,8 @@ int cmd_script(int argc, const char **argv)
 	OPT_STRING('C', "cpu", &cpu_list, "cpu", "list of cpus to profile"),
 	OPT_STRING('c', "comms", &symbol_conf.comm_list_str, "comm[,comm...]",
 		   "only display events for these comms"),
+	OPT_STRING('X', "no-comms", &symbol_conf.no_comm_list_str, "comm[,comm...]",
+		   "exclude these comms"),
 	OPT_STRING(0, "pid", &symbol_conf.pid_list_str, "pid[,pid...]",
 		   "only consider symbols in these pids"),
 	OPT_STRING(0, "tid", &symbol_conf.tid_list_str, "tid[,tid...]",
