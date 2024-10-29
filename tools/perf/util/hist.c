@@ -1396,6 +1396,7 @@ static void hist_entry__check_and_remove_filter(struct hist_entry *he,
 	switch (type) {
 	case HIST_FILTER__THREAD:
 		if (symbol_conf.comm_list == NULL &&
+		    symbol_conf.no_comm_list == NULL &&
 		    symbol_conf.pid_list == NULL &&
 		    symbol_conf.tid_list == NULL)
 			return;

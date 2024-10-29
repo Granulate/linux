@@ -54,6 +54,7 @@ struct symbol_conf {
 	const char	*guestmount;
 	const char	*dso_list_str,
 			*comm_list_str,
+			*no_comm_list_str,
 			*pid_list_str,
 			*tid_list_str,
 			*sym_list_str,
@@ -63,6 +64,7 @@ struct symbol_conf {
 	unsigned long	time_quantum;
        struct strlist	*dso_list,
 			*comm_list,
+			*no_comm_list,
 			*sym_list,
 			*dso_from_list,
 			*dso_to_list,
